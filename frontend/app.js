@@ -7,6 +7,60 @@ const $ = id => document.getElementById(id);
 const num = id => Math.max(0, parseFloat($(id).value) || 0);
 const COL = {Low: "#2e7d32", Moderate: "#c26a00", High: "#d9451f", Imminent: "#b0001a"};
 const Z80 = 1.2816, TYPICAL_ZONE = 51;
+const REPAIR_SCHEDULING_PROBABILITY = 0.25;
+const RESPONSE_WORKFORCE = {
+  totalPeople: 1000,
+  teams: {assessment: 70, line: 105, tree: 70, equipment: 35, protection: 35},
+  people: {assessment: 140, line: 420, tree: 210, equipment: 105, protection: 105, support: 20},
+};
+const MAP_FACILITIES = [
+  ["hospital", "Hospital 1", 22, -80.11, 37.392],
+  ["hospital", "Hospital 2", 5, -80.032, 37.263],
+  ["hospital", "Hospital 3", 8, -80.019, 37.274],
+  ["hospital", "Hospital 4", 105, -79.942, 37.251],
+  ["hospital", "Hospital 5", 65, -79.939, 37.266],
+  ["police", "Police Station 1", 37, -79.948, 37.271],
+  ["police", "Police Station 2", 18, -79.899, 37.279],
+  ["police", "Police Station 3", 22, -80.057, 37.292],
+  ["police", "Police Station 4", 71, -80.128, 37.277],
+  ["fire", "Fire Station 1", 68, -79.917, 37.251],
+  ["fire", "Fire Station 2", 44, -79.793, 37.272],
+  ["fire", "Fire Station 3", 32, -79.937, 37.289],
+  ["fire", "Fire Station 4", 14, -79.901, 37.295],
+  ["fire", "Fire Station 5", 18, -79.899, 37.28],
+  ["fire", "Fire Station 6", 34, -80.063, 37.28],
+  ["fire", "Fire Station 7", 84, -79.956, 37.12],
+  ["fire", "Fire Station 8", 78, -79.876, 37.418],
+  ["fire", "Fire Station 9", 19, -79.953, 37.316],
+  ["fire", "Fire Station 10", 22, -80.057, 37.292],
+  ["fire", "Fire Station 11", 86, -80.205, 37.031],
+  ["fire", "Fire Station 12", 8, -80.03, 37.289],
+  ["fire", "Fire Station 13", 33, -79.92, 37.271],
+  ["fire", "Fire Station 14", 30, -79.811, 37.236],
+  ["fire", "Fire Station 15", 45, -79.73, 37.385],
+  ["fire", "Fire Station 16", 84, -79.95, 37.202],
+  ["fire", "Fire Station 17", 21, -79.811, 37.375],
+  ["fire", "Fire Station 18", 31, -79.948, 37.247],
+  ["fire", "Fire Station 19", 22, -80.114, 37.39],
+  ["fire", "Fire Station 20", 22, -80.076, 37.372],
+  ["fire", "Fire Station 21", 28, -79.969, 37.286],
+  ["fire", "Fire Station 22", 53, -80.21, 37.228],
+  ["fire", "Fire Station 23", 44, -79.722, 37.258],
+  ["fire", "Fire Station 24", 20, -80.073, 37.201],
+  ["fire", "Fire Station 25", 65, -79.946, 37.267],
+  ["fire", "Fire Station 26", 85, -79.938, 37.322],
+  ["fire", "Fire Station 27", 86, -80.115, 37.166],
+  ["fire", "Fire Station 28", 10, -79.911, 37.238],
+  ["fire", "Fire Station 29", 1, -79.964, 37.346],
+  ["fire", "Fire Station 30", 86, -80.048, 37.013],
+  ["fire", "Fire Station 31", 60, -79.974, 37.266],
+  ["fire", "Fire Station 32", 10, -79.814, 37.106],
+  ["fire", "Fire Station 33", 44, -79.719, 37.32],
+  ["fire", "Fire Station 34", 54, -80.006, 37.307],
+  ["fire", "Fire Station 35", 71, -80.131, 37.276],
+  ["fire", "Fire Station 36", 61, -80.01, 37.229],
+  ["fire", "Fire Station 37", 57, -80.01, 37.267],
+];
 const NT = O.term_names, FE = O.features, NF = FE.length;
 const IDX = [0].concat(FE.map((_, i) => 2 + i));
 const BETA = O.terms.map(t => t.beta);
@@ -51,7 +105,7 @@ function sevCalc(o) {
 }
 function risk(p, o) {
   const c = D.circ[p.c], ce = cellEta(p.f), sv = sevCalc(o);
-  const zone = Math.max(1, p.nd ? Math.min(p.z, c.n) : c.n);
+  const zone = Math.max(1, p.nd ? Math.min(p.z, c.n) : p.cn);
   const mu = zone * Math.exp(ce.eta + sv.ls), P = pNB(mu, O.alpha), sd = Math.sqrt(ce.v + sv.v);
   return {c, ce, sv, zone, mu, P, sd, Plo: pNB(mu * Math.exp(-Z80 * sd), O.alpha), Phi: pNB(mu * Math.exp(Z80 * sd), O.alpha),
           ratio: Math.exp(2 * Z80 * sd)};
@@ -65,12 +119,6 @@ const sevName = S => S < .05 ? "Calm" : S < .25 ? "Minor" : S < .6 ? "Moderate" 
 const readStorm = () => ({gust: num("gust"), rain: num("rain"), snow: num("snow"), ante: num("ante"), leaf: $("leaf").checked ? 1 : 0});
 
 function hrs(h) { if (h <= 0) return "0 h"; return h < 36 ? Math.max(1, Math.round(h)) + " h" : (Math.round(h / 12) / 2) + " days"; }
-function unitOf(h) { return h < 36 ? [Math.max(1, Math.round(h)), "h"] : [Math.round(h / 12) / 2, "days"]; }
-function rangeTxt(a, b) {
-  if (b <= 0) return "0 hours";
-  const A = unitOf(a), B = unitOf(b);
-  return A[1] === B[1] ? `${A[0]}–${B[0]} ${A[1] === "h" ? "hours" : "days"}` : `${A[0]} hours–${B[0]} days`;
-}
 function restoration() {
   let dir = 0;
   Object.keys(L.items).forEach(k => dir += num("n_" + k) * L.items[k].hours);
@@ -88,10 +136,324 @@ function restoration() {
   let lo, hi;
   if (early) { lo = hist.p10; hi = hist.p50; }
   else { lo = Math.max(hist.p10, bLo); hi = Math.max(hist.p90, bHi); }
+  const estimate = early
+    ? Math.sqrt(lo * hi)
+    : Math.max(hist.p50, (bLo + bHi) / 2);
   const neverPct = 100 * R.n_never_closed_excluded / (R.n + R.n_never_closed_excluded);
-  return {S, sevMult, extrap, dir, mult, tot, cr, blocked, bLo, bHi, hist, early, lo, hi, hasDamage: tot > 0, neverPct};
+  return {S, sevMult, extrap, dir, mult, tot, cr, blocked, bLo, bHi, hist, early, lo, hi, estimate, hasDamage: tot > 0, neverPct};
 }
 
+function scheduleTeamTasks(tasks, teamCount) {
+  const availableAt = Array(teamCount).fill(0);
+  const completions = new Map();
+  const starts = new Map();
+  const pending = tasks.slice().sort((a, b) =>
+    a.readyAt - b.readyAt ||
+    b.duration - a.duration ||
+    b.priority - a.priority ||
+    a.id.localeCompare(b.id),
+  );
+
+  pending.forEach(task => {
+    let team = 0;
+    for (let i = 1; i < availableAt.length; i++) {
+      if (availableAt[i] < availableAt[team]) team = i;
+    }
+    const start = Math.max(availableAt[team], task.readyAt);
+    const finish = start + task.duration;
+    availableAt[team] = finish;
+    starts.set(task.id, start);
+    completions.set(task.id, finish);
+  });
+  return {completions, starts};
+}
+
+function splitExpectedWork(expected) {
+  const units = Array(Math.floor(expected)).fill(1);
+  const remainder = expected - units.length;
+  if (remainder > 1e-8) units.push(remainder);
+  return units;
+}
+
+function premiseFacilityCounts() {
+  const counts = new Map(D.prem.map(premise => [
+    premise.id,
+    {hospitals: 0, police: 0, fire: 0},
+  ]));
+  MAP_FACILITIES.forEach(([kind, , , lon, lat]) => {
+    const nearest = D.prem.reduce((best, premise) => {
+      const dx = (premise.p[0] - lon) * Math.cos(lat * Math.PI / 180);
+      const dy = premise.p[1] - lat;
+      const distance = dx * dx + dy * dy;
+      return distance < best.distance ? {premise, distance} : best;
+    }, {premise: D.prem[0], distance: Infinity}).premise;
+    const entry = counts.get(nearest.id);
+    if (kind === "hospital") entry.hospitals++;
+    else if (kind === "police") entry.police++;
+    else if (kind === "fire") entry.fire++;
+  });
+  return counts;
+}
+
+const PREMISE_CELL_DAMAGE = new Map(D.prem.map(premise => {
+  const [lon, lat] = premise.p;
+  const cell = D.cells.reduce((nearest, current) => {
+    const dx = current[0] - lon, dy = current[1] - lat;
+    const distance = dx * dx + dy * dy;
+    return distance < nearest.distance ? {cell: current, distance} : nearest;
+  }, {cell: null, distance: Infinity}).cell;
+  return [premise.id, cell ? cell[3] : 0];
+}));
+
+function premiseDamageEstimate(premise, o) {
+  const sv = sevCalc(o);
+  const eta = cellEta(premise.f).eta;
+  const rate = sv.zero ? 0 : Math.exp(eta + sv.ls);
+  const expectedRecords = premise.cn * rate;
+  return {
+    probability: sv.zero ? 0 : pNB(expectedRecords, O.alpha),
+    rate,
+    zero: sv.zero,
+  };
+}
+
+function scorePriorityPremises(o) {
+  const facilitiesByPremise = premiseFacilityCounts();
+  const premiseFacts = D.prem.map(premise => {
+    const damageEstimate = premiseDamageEstimate(premise, o);
+    const counts = facilitiesByPremise.get(premise.id);
+    const weightedFacilities = counts.hospitals * 3 + counts.police * 2 + counts.fire;
+    const cellDamageHistory = PREMISE_CELL_DAMAGE.get(premise.id) || 0;
+    return {premise, damageEstimate, counts, weightedFacilities, cellDamageHistory};
+  });
+  const maxOf = selector => Math.max(1, ...premiseFacts.map(selector));
+  const densityMax = maxOf(item => Math.max(0, item.premise.f[0]));
+  const customerMax = maxOf(item => Math.log1p(item.premise.cn));
+  const reportMax = maxOf(item => Math.sqrt(item.cellDamageHistory));
+  const damageRateMax = maxOf(item => item.damageEstimate.rate);
+  const facilityWeightMax = maxOf(item => item.weightedFacilities);
+  const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+  const median = values => {
+    const sorted = values.slice().sort((a, b) => a - b);
+    const middle = Math.floor(sorted.length / 2);
+    return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+  };
+  const densityReference = median(premiseFacts.map(item => Math.exp(item.premise.f[0])));
+  const customerReference = median(premiseFacts.map(item => item.premise.cn));
+
+  return premiseFacts.map(item => {
+    const {premise, damageEstimate, counts} = item;
+    const riskProbability = damageEstimate.probability;
+    const densityFactor = clamp(Math.exp(premise.f[0]) / Math.max(densityReference, 1), 0.5, 2);
+    const customerFactor = clamp(Math.sqrt(premise.cn / Math.max(customerReference, 1)), 0.5, 2);
+    const facilityCount = counts.hospitals + counts.police + counts.fire;
+    const points = {
+      facilities: 35 * item.weightedFacilities / facilityWeightMax,
+      risk: 20 * riskProbability,
+      density: 15 * Math.max(0, premise.f[0]) / densityMax,
+      customers: 10 * Math.log1p(premise.cn) / customerMax,
+      history: 20 * Math.sqrt(item.cellDamageHistory) / reportMax,
+    };
+    const propensityScore = damageEstimate.rate / damageRateMax;
+    const historyScore = Math.sqrt(item.cellDamageHistory) / reportMax;
+    const damageSeverityScore = damageEstimate.zero
+      ? 0
+      : 100 * (0.7 * propensityScore + 0.3 * historyScore);
+    return {
+      premise,
+      circuit: premise.c + 1,
+      counts,
+      customers: premise.cn,
+      cellDamageHistory: item.cellDamageHistory,
+      damageSeverityScore,
+      riskProbability,
+      facilityCount,
+      facilityAllowanceMinutes: facilityCount * 2,
+      restorationFactors: {density: densityFactor, customers: customerFactor},
+      points,
+      score: Object.values(points).reduce((sum, value) => sum + value, 0),
+      damageEstimate,
+    };
+  }).sort((a, b) => b.score - a.score || a.premise.id.localeCompare(b.premise.id));
+}
+
+function scheduleAllPremises(o) {
+  const mix = [
+    {name: "Wire", share: 130 / 240, asset: null, team: "line"},
+    {name: "Switch", share: 53 / 240, asset: "Other", team: "protection"},
+    {name: "Pole", share: 52 / 240, asset: "Pole", team: "line"},
+    {name: "Equipment", share: 5 / 240, asset: "Transformer", team: "equipment"},
+  ];
+  const weather = sevCalc(o);
+  const baseMedianHours = Number(R.baseline_days["0.5"]) * 24;
+  const premises = scorePriorityPremises(o).map(priority => {
+    const riskProbability = weather.zero ? 0 : priority.riskProbability;
+    const facilities = {
+      hospital: priority.counts.hospitals,
+      police: priority.counts.police,
+      fire: priority.counts.fire,
+    };
+    const lowRisk = bandOf(riskProbability) === "Low";
+    return {
+      ...priority,
+      outageRisk: riskProbability,
+      lowRisk,
+      damageProbability: lowRisk || weather.zero ? 0 : priority.damageEstimate.probability,
+      facilities,
+      inspectionOnly: !lowRisk &&
+        priority.damageEstimate.probability < REPAIR_SCHEDULING_PROBABILITY,
+      modeledRepairHours: lowRisk || weather.zero ? 0 : mix.reduce((hours, type) => {
+        const assetTerm = type.asset && R.terms.find(term => term.name === `asset:${type.asset}`);
+        const durationPerJob = baseMedianHours * Math.exp(assetTerm ? assetTerm.beta : 0);
+        return hours + priority.damageEstimate.probability * type.share * durationPerJob;
+      }, 0),
+      teams: {assessment: 0, detailedAssessment: 0, tree: 0, line: 0, protection: 0, equipment: 0},
+      visitStart: 0,
+      inspectionComplete: 0,
+      inspectionDuration: lowRisk ? 0 : 0.5 + priority.damageSeverityScore / 200 +
+        priority.facilityAllowanceMinutes / 60,
+      repairStart: null,
+      repairDuration: 0,
+      visitDuration: 0,
+      completion: null,
+      categoryJobs: {},
+    };
+  });
+  const maxRepairHours = Math.max(1, ...premises.map(premise => premise.modeledRepairHours));
+  const activePremises = premises.filter(premise => !premise.lowRisk);
+  activePremises.sort((a, b) => {
+    const dispatchValue = premise =>
+      0.9 * premise.modeledRepairHours / maxRepairHours +
+      0.1 * premise.score / 100;
+    return dispatchValue(b) - dispatchValue(a) || b.score - a.score ||
+      a.premise.id.localeCompare(b.premise.id);
+  });
+  const lowRiskPremises = premises.filter(premise => premise.lowRisk);
+  let taskSequence = 0;
+  let elapsed = 0;
+  const assessmentTasks = [], treeTasks = [], repairTasks = [];
+  activePremises.forEach(premise => {
+    premise.visitStart = elapsed;
+    premise.inspectionComplete = premise.visitStart + premise.inspectionDuration;
+    premise.teams.assessment = 1;
+    premise.completion = premise.inspectionComplete;
+    elapsed = premise.inspectionComplete;
+    if (!premise.inspectionOnly) {
+      mix.forEach(type => {
+        const expectedTypeWork = premise.damageProbability * type.share;
+        premise.categoryJobs[type.name] = expectedTypeWork;
+        const assetTerm = type.asset && R.terms.find(term => term.name === `asset:${type.asset}`);
+        const durationPerJob = baseMedianHours * Math.exp(assetTerm ? assetTerm.beta : 0);
+        const treeSupportJobs = type.team === "line" ? expectedTypeWork * 0.2 : 0;
+        let treeRemaining = treeSupportJobs;
+        splitExpectedWork(expectedTypeWork).forEach((unit, index) => {
+          const treeWeight = Math.min(unit, treeRemaining);
+          const pieces = [];
+          if (treeWeight > 1e-8) pieces.push({weight: treeWeight, needsTree: true});
+          if (unit - treeWeight > 1e-8) pieces.push({weight: unit - treeWeight, needsTree: false});
+          treeRemaining = Math.max(0, treeRemaining - treeWeight);
+          pieces.forEach(piece => {
+            const id = `${premise.premise.id}|${type.name}|${index}|${taskSequence++}`;
+            const weight = piece.weight;
+            assessmentTasks.push({
+              id,
+              premise: premise.premise.id,
+              duration: 0.5 * weight,
+              readyAt: premise.inspectionComplete,
+              priority: premise.score,
+            });
+            if (piece.needsTree) {
+              treeTasks.push({id, premise: premise.premise.id, duration: 0.5 * weight, priority: premise.score});
+            }
+            repairTasks.push({
+              id,
+              premise: premise.premise.id,
+              team: type.team,
+              duration: durationPerJob * weight,
+              priority: premise.score,
+              needsTree: piece.needsTree,
+            });
+          });
+        });
+      });
+
+      premise.teams.detailedAssessment = Math.min(
+        Math.ceil(premise.damageProbability),
+        RESPONSE_WORKFORCE.teams.assessment - 1,
+      );
+      const expectedLineJobs = premise.categoryJobs.Wire + premise.categoryJobs.Pole;
+      premise.teams.tree = expectedLineJobs > 0
+        ? Math.min(Math.ceil(expectedLineJobs * 0.2), RESPONSE_WORKFORCE.teams.tree)
+        : 0;
+      ["line", "equipment", "protection"].forEach(team => {
+        const expectedByTeam = team === "line"
+          ? expectedLineJobs
+          : premise.categoryJobs[team === "protection" ? "Switch" : "Equipment"];
+        premise.teams[team] = expectedByTeam > 0
+          ? Math.min(Math.ceil(expectedByTeam), RESPONSE_WORKFORCE.teams[team])
+          : 0;
+      });
+    }
+  });
+  const assessedAt = scheduleTeamTasks(
+    assessmentTasks,
+    RESPONSE_WORKFORCE.teams.assessment - 1,
+  ).completions;
+  treeTasks.forEach(task => { task.readyAt = assessedAt.get(task.id) || 0; });
+  const treeClearedAt = scheduleTeamTasks(treeTasks, RESPONSE_WORKFORCE.teams.tree).completions;
+  ["line", "equipment", "protection"].forEach(team => {
+    const jobs = repairTasks.filter(task => task.team === team).map(task => ({
+      ...task,
+      readyAt: task.needsTree
+        ? treeClearedAt.get(task.id) || assessedAt.get(task.id) || 0
+        : assessedAt.get(task.id) || 0,
+    }));
+    const {completions, starts} = scheduleTeamTasks(jobs, RESPONSE_WORKFORCE.teams[team]);
+    jobs.forEach(job => {
+      const premise = activePremises.find(item => item.premise.id === job.premise);
+      const start = starts.get(job.id);
+      premise.repairStart = premise.repairStart === null
+        ? start
+        : Math.min(premise.repairStart, start);
+      premise.completion = Math.max(premise.completion, completions.get(job.id) || 0);
+    });
+  });
+  assessedAt.forEach((finish, id) => {
+    const premiseId = id.split("|")[0];
+    const premise = activePremises.find(item => item.premise.id === premiseId);
+    premise.completion = Math.max(premise.completion, finish);
+  });
+  activePremises.forEach(premise => {
+    premise.repairDuration = premise.repairStart === null
+      ? 0
+      : premise.completion - premise.repairStart;
+    premise.visitDuration = premise.completion - premise.visitStart;
+  });
+  const orderedPremises = activePremises.concat(lowRiskPremises);
+  const makespan = Math.max(
+    0,
+    ...activePremises.filter(premise => !premise.inspectionOnly).map(premise => premise.completion),
+  );
+  const inspectionOnlyCount = activePremises.filter(premise => premise.inspectionOnly).length;
+  return {
+    premises: orderedPremises,
+    makespan,
+    expectedDamageProbability: activePremises.reduce(
+      (sum, premise) => sum + premise.damageProbability,
+      0,
+    ),
+    inspectionOnlyCount,
+    noOutageCount: lowRiskPremises.length,
+  };
+}
+
+function formatScheduledDuration(hours) {
+  if (hours <= 0) return "0 min";
+  const minutes = Math.max(5, Math.round(hours * 12) * 5);
+  if (minutes < 60) return `${minutes} min`;
+  const h = Math.floor(minutes / 60), m = minutes % 60;
+  return m ? `${h} h ${m} min` : `${h} h`;
+}
 
 // ---------------------------------------------------------------- NWS (api.weather.gov) live conditions
 // Only the ~400 m cell centre of the selected premise, rounded to 2 decimals (~1 km), is sent to the NWS.
@@ -187,22 +549,29 @@ const bar = (P, c) => `<div class="bar"><i style="width:${Math.round(P * 100)}%;
 function render() {
   const o = readStorm(), p = D.prem[$("pm").value], x = risk(p, o), band = bandOf(x.P), col = COL[band];
   const rs = restoration(), conf = confidence(x);
+  const schedule = scheduleAllPremises(o);
+  const selectedPremise = schedule.premises.find(item => item.premise.id === p.id);
+  if (!selectedPremise) throw new Error(`No restoration schedule found for premise ${p.id}`);
+  const estimate = selectedPremise.lowRisk
+    ? "No restoration expected"
+    : selectedPremise.inspectionOnly
+      ? "Inspection only; repair ETA after findings"
+    : formatScheduledDuration(selectedPremise.completion);
   $("gust_v").textContent = o.gust + " mph"; $("rain_v").textContent = f2(o.rain, 1) + " in";
   $("snow_v").textContent = f2(o.snow, 1) + " in"; $("ante_v").textContent = f2(o.ante, 1) + " in";
   $("sevline").innerHTML = `Storm severity <b>${f2(x.sv.S)}</b> × Feb 2025 (${sevName(x.sv.S)}) · ${chip(SV.source)}`;
   $("hdpill").textContent = "Model trained " + M.generated.slice(0, 10) + " · anonymized data";
   const long = rs.hi >= 24, pre = band !== "Low" || p.ls, esc = p.ls || long || band === "Imminent";
-  const range = rangeTxt(rs.lo, rs.hi);
   $("kpis").innerHTML =
     `<div class="kpi"><small>Outage risk</small><div class="v" style="color:${col}">${band}</div>${bar(x.P, col)}<div class="n">${pc(x.P)} chance · 80% interval ${pc(x.Plo)}–${pc(x.Phi)} · confidence ${conf}</div></div>
-<div class="kpi"><small>Restoration estimate</small><div class="v">${range}</div><div class="n">after crews can safely start · typical (median) ${hrs(rs.hist.p50)} · scales with storm severity · model estimate</div></div>
+<div class="kpi"><small>Your premise-specific restoration estimate</small><div class="v">${estimate}</div><div class="n">${p.id} · circuit C-${p.c + 1} · inspections and repair work are scheduled separately</div></div>
 <div class="kpi"><small>Storm severity</small><div class="v">${sevName(x.sv.S)}</div><div class="n">${f2(x.sv.S)} × the Feb 2025 storm · weather weights ${SV.source}</div></div>
 <div class="kpi"><small>Alerts</small><div class="v">${pre ? "Eligible" : "Not yet"}</div><div class="n">${esc ? "Human escalation triggered" : "Standard automated alerts"}</div></div>`;
   renderRisk(p, o, x, band, col);
   renderAlgo(p, o, x, band, conf);
-  renderRest(p, x, rs, range);
+  renderRest(p, x, rs, estimate, schedule);
   renderPrep(p, band, long, pre, esc, rs);
-  renderMsgs(o, band, range, rs, p);
+  renderMsgs(o, band, estimate, rs, p);
   renderMeth();
   if (mapReady) updateMap(x, p, o, col); else if (fb) drawFb();
   if (lastPm !== $("pm").value) { lastPm = $("pm").value; focusMap(); }
@@ -274,19 +643,60 @@ interval width ratio = P-scale exp(2·${Z80}·sd) = ${f2(x.ratio, 2)}×   → ${
 confidence = <b>${conf}</b></div></div></div>`;
 }
 
-function renderRest(p, x, rs, range) {
+function renderRest(p, x, rs, estimate, schedule) {
   const H = rs.hist;
   const aft = R.terms.filter(t => t.selected && t.name.startsWith("asset:"));
-  $("rest").innerHTML = `<h2>Restoration estimate</h2><div style="font-size:28px;font-weight:700">${range}</div>
-<div class="mu">after crews can safely start. Model estimate, not a promise. ${rs.early ? "Damage is beyond your nearest protective device, so crews can isolate it and restore you in an earlier step (rule: between the fast and median historical repair)." : ""}</div>
+  const premiseScheduleRows = schedule.premises.map((location, index) => {
+    const facilityText = [
+      location.facilities.hospital && `${location.facilities.hospital} hospital${location.facilities.hospital === 1 ? "" : "s"}`,
+      location.facilities.police && `${location.facilities.police} police station${location.facilities.police === 1 ? "" : "s"}`,
+      location.facilities.fire && `${location.facilities.fire} fire station${location.facilities.fire === 1 ? "" : "s"}`,
+    ].filter(Boolean).join(", ") || "None mapped";
+    const crewPlan = location.lowRisk
+      ? "No visit or crews planned (Low risk)"
+      : location.inspectionOnly
+        ? "1 inspection team; repair need depends on findings"
+        : "1 inspection team; repair crews dispatched only if inspection confirms damage";
+    const reason = location.lowRisk
+      ? `Premise-cell damage probability is below the Low-risk threshold of ${pc(B.cuts[0])}; assume no outage, so no restoration time is assigned.`
+      : location.inspectionOnly
+        ? `Damage severity score ${location.damageSeverityScore.toFixed(0)}/100 informs the inspection duration. The modeled damage probability is below the ${REPAIR_SCHEDULING_PROBABILITY * 100}% repair-work threshold, so inspect before dispatching repair crews.`
+        : `Damage severity score ${location.damageSeverityScore.toFixed(0)}/100 informs the inspection duration. Repair workload is probability-weighted from historical repair durations, not a confirmed job count; dispatch depends on inspection findings.`;
+    const inspectionWindow = location.lowRisk
+      ? "—"
+      : `${formatScheduledDuration(location.visitStart)}–${formatScheduledDuration(location.inspectionComplete)}`;
+    const inspectionDuration = location.lowRisk
+      ? "—"
+      : formatScheduledDuration(location.inspectionDuration);
+    const repairStart = location.lowRisk || location.inspectionOnly || location.repairStart === null
+      ? "—"
+      : formatScheduledDuration(location.repairStart);
+    const repairWindow = location.inspectionOnly
+      ? "Pending inspection findings"
+      : location.lowRisk
+        ? "—"
+        : formatScheduledDuration(location.repairDuration);
+    const completion = location.lowRisk
+      ? "No restoration expected"
+      : location.inspectionOnly
+        ? "Inspection only; restoration TBD"
+        : `<b>${formatScheduledDuration(location.completion)}</b>`;
+    return `<tr${location.premise.id === p.id ? ' class="selected-premise"' : ""}><td class="r">${location.lowRisk ? "—" : index + 1}</td><td class="r"><b>${location.score.toFixed(1)}</b></td>
+<td><b>${location.premise.id}</b></td><td>C-${location.circuit}</td><td>${location.customers}</td><td>${pc(location.outageRisk)}</td>
+<td class="r">${location.damageSeverityScore.toFixed(0)}</td><td>${facilityText}</td><td>${crewPlan}</td>
+<td>${location.lowRisk ? "—" : `${location.modeledRepairHours.toFixed(1)} probability-weighted h`}</td>
+<td>${inspectionDuration}</td><td>${inspectionWindow}</td><td>${repairStart}</td><td>${repairWindow}</td><td>${completion}</td><td>${reason}</td></tr>`;
+  }).join("");
+  $("rest").innerHTML = `<h2>Selected-premise restoration estimate</h2><div style="font-size:28px;font-weight:700">${estimate}</div>
+<div class="mu">Single planning estimate after crews can safely start; this is not a promise. ${rs.early ? "Damage is beyond your nearest protective device, so crews can isolate it and restore you in an earlier step." : ""}</div>
 <div class="two" style="margin-top:12px"><div><h3 style="margin-top:0">Historical completion ${chip("learned")}</h3>
-<div class="mu">Interval-censored log-normal AFT on ${R.n} closed Feb 2025 repairs (design “${R.selected_design}” chosen by leave-one-day-out CV).</div>
+<div class="mu">Interval-censored log-normal AFT on ${R.n} closed Feb 2025 repairs (design “${R.selected_design}” chosen by leave-one-day-out CV). The headline is a single planning estimate; quantiles below show historical uncertainty.</div>
 <table><tr><th>Quantile (${$("ag").value})</th><th class="r">Time</th></tr><tr><td>Fast (P10)</td><td class="r">${hrs(H.p10)}</td></tr><tr><td>Typical (median)</td><td class="r">${hrs(H.p50)}</td></tr><tr><td>Slow (P90)</td><td class="r">${hrs(H.p90)}</td></tr></table></div>
 <div><h3 style="margin-top:0">Bottom-up labor ${chip("reference")}</h3>
 <div class="mu">Workbook hours × indirect multiplier ÷ crew.</div>
 ${rs.hasDamage ? `<table><tr><td>Direct repair labor</td><td class="r">${f2(rs.dir, 1)} h</td></tr><tr><td>× multiplier ${f2(rs.mult, 1)}</td><td class="r">${f2(rs.tot, 0)} labor-h</td></tr><tr><td>÷ crew of ${rs.cr} (crew size ±1)</td><td class="r">${hrs(rs.bLo)}–${hrs(rs.bHi)}</td></tr>${rs.hasDamage ? `<tr><td>× storm severity ${f2(rs.S)}<sup>${f2(R.severity_scaling.beta, 2)}</sup> = ${f2(rs.sevMult, 2)}</td><td class="r"></td></tr>` : ""}${rs.blocked ? `<tr><td>Blocked access ${chip("assumption")}</td><td class="r">+2–8 h</td></tr>` : ""}</table>` : `<div class="mu">No damage entered, so only the historical range is shown.</div>`}</div></div>
 <h3>How the two are combined ${chip("rule")}</h3>
-<div class="mu">Both are multiplied by the storm-severity factor ${f2(rs.sevMult, 2)} (severity ${f2(rs.S)}× Feb 2025, raised to the learned power).</div>
+<div class="mu">The single planning estimate uses the historical median or the midpoint of the bottom-up crew-time estimate, whichever is longer. For the early-restoration case, it uses the geometric midpoint between historical P10 and P50. The storm-severity factor is ${f2(rs.sevMult, 2)} (severity ${f2(rs.S)}× Feb 2025, raised to the learned power).</div>
 <div class="formula">${rs.early ? "early step: low = historical P10, high = historical median" : "low = max(historical P10, bottom-up low)\nhigh = max(historical P90, bottom-up high)"}</div>
 <h3>What the data does and does not support</h3><ul>
 <li><b>Asset type matters:</b> ${aft.map(t => `${t.name.replace("asset:", "")} ×${f2(t.tr)}`).join(", ")} the time of primary wire.</li>
@@ -295,7 +705,18 @@ ${rs.hasDamage ? `<table><tr><td>Direct repair labor</td><td class="r">${f2(rs.d
 <li><b>Calibrated to a Feb 2025-scale event only.</b> Sep 2024 repair gaps all fall at 23–26 days, which looks like batch close-out, so that event was excluded. Milder or harsher storms were not learned.</li>
 <li><b>Heavier tail than shown:</b> ${f2(rs.neverPct, 1)}% of Feb 2025 records were never marked repaired and are excluded from this conditional model. Including them as censored raises σ from ${f2(R.sigma, 2)} to ${f2(R.sensitivity_with_censored.sigma, 2)}.</li>
 <li>Dates have no clock time, so precision is about one day.</li></ul>
-<div class="mu">Could move it: crew count, blocked roads, extra damage found, damage upstream.</div>`;
+<div class="mu">Could move it: crew count, blocked roads, extra damage found, damage upstream.</div>
+<h3>Repair-time-optimized response plan · 1,000-worker scenario</h3>
+<div class="fact"><b>${schedule.noOutageCount === schedule.premises.length
+    ? "No restoration expected: all premises are Low risk"
+    : schedule.makespan > 0
+      ? `Estimated premise schedule finish: ${formatScheduledDuration(schedule.makespan)}`
+      : "Inspection-only premises; restoration timing depends on findings"}</b>
+<div>The plan ranks and schedules anonymized premises individually, not circuits. Premises sharing a circuit remain separate stops. One inspection team follows the suggested premise route; inspection duration rises with the premise damage-severity score and includes a small facility allowance. Repair crews are dispatched only after inspection confirms damage. The table includes circuit number only as context. Facility counts are assigned to the geographically nearest premise and are approximate. Low-risk premises (premise-cell damage probability below ${pc(B.cuts[0])}) receive no restoration estimate; inspection-only premises need findings before a repair estimate can be made.</div></div>
+<div class="mu">Worker pool assumption: 70 two-person assessment teams (140 people), 105 four-person line teams (420), 70 three-person tree/access teams (210), 35 three-person equipment teams (105), 35 three-person protection teams (105), and 20 shared dispatch/logistics personnel. These proportions scale the illustrative roster from the supplied research; only the two-person assessment team has a cited AEP team-size reference.</div>
+<div class="mu" style="margin-top:6px">Each premise receives its own 0–100 priority score using the established weights: mapped facilities (35), premise damage probability (20), density (15), customer count (10), and historical damage records in its nearest mapped cell (20). Customer count is an exposure input to the cell-level damage probability and remains a separate priority factor; it is never multiplied into repair-job volume. The separate 0–100 severity score uses per-customer modeled damage propensity and local historical damage records, not customer count. The score is a soft guideline: probability-weighted repair effort contributes 90% of the route heuristic and priority score contributes 10%. Repair durations are scenario expectations, not observed damage or confirmed jobs.</div>
+<div class="mu" style="margin-top:6px">The schedule uses the research sample mix (130 wire, 53 switch, 52 pole, 5 equipment across 240 records); switch repair time uses the model's "Other" asset category as a proxy. Repair effort is the damage probability times representative historical median repair durations. The ${REPAIR_SCHEDULING_PROBABILITY * 100}% threshold for repair-work scheduling is a planning assumption; below it, the route plans inspection only and repair assignment waits for findings. Twenty percent of wire/pole work receives 30 minutes of tree/access support. Facilities are assigned to their geographically nearest premise for this approximate plan. No travel, shift/rest, materials, switching dependencies, or confirmed damage are modeled. This is a workload-balancing heuristic, not a guaranteed global optimum.</div>
+<div class="priority-table-wrap" style="margin-top:8px"><table class="priority-table circuit-schedule"><thead><tr><th class="r">Suggested order</th><th class="r">Premise priority score</th><th>Premise</th><th>Circuit</th><th class="r">Customers</th><th class="r">Premise-cell damage probability</th><th class="r">Damage severity (0–100)</th><th>Approximate mapped facilities</th><th>Inspection / dispatch decision</th><th>Probability-weighted repair effort</th><th>Inspection duration</th><th>Inspection window</th><th>Repair work begins</th><th>Repair work window</th><th>Premise restoration estimate (from response start)</th><th>Why / inspection decision</th></tr></thead><tbody>${premiseScheduleRows}</tbody></table></div>`;
 }
 
 function renderPrep(p, band, long, pre, esc, rs) {
@@ -308,11 +729,11 @@ function renderPrep(p, band, long, pre, esc, rs) {
 <ul><li>Timing: 48 h and 24 h before the storm, then within minutes of a confirmed outage.</li><li>Channel: text first, email second${p.ls ? ", plus a phone call from a person" : ""}.</li><li>Send an update when the estimate changes by more than 25%.</li><li>Escalate to a human if: life-support flag, estimate over 24 h, or risk Imminent.</li></ul>${esc ? `<div class="safe"><b>Escalation triggered:</b> ${p.ls ? "declared life-support customer" : long ? "long estimate" : "imminent risk"}.</div>` : ""}<div class="mu">Rules ${chip("rule")} are challenge assumptions, not documented utility policy.</div>`;
 }
 
-function renderMsgs(o, band, range, rs, p) {
+function renderMsgs(o, band, estimate, rs, p) {
   const lsn = p.ls ? "\nIf anyone at home relies on medical equipment, please start your backup plan now or call us for help." : "";
   const M2 = {"Pre-storm": `Storm alert: winds up to ${o.gust} mph are expected in your area. Chance of an outage: ${band.toLowerCase()}. Charge devices and gather water and food now.${lsn}\nStay 30+ feet from any downed line and call 911.`,
-    "Outage confirmed": `We know your power is out. Crews will begin once it is safe. Early estimate: ${range} after work starts. This is an estimate, not a promise.${lsn}\nNever use a generator indoors.`,
-    "Estimate updated": `Update: our estimate changed to ${range}. Reason: ${rs.early ? "crews can isolate the damage and restore you in an earlier step" : "new damage or crew availability"}. We will update you again if it changes.`,
+    "Outage confirmed": `We know your power is out. Crews will begin once it is safe. Early estimate: ${estimate} after work starts. This is an estimate, not a promise.${lsn}\nNever use a generator indoors.`,
+    "Estimate updated": `Update: our estimate changed to ${estimate}. Reason: ${rs.early ? "crews can isolate the damage and restore you in an earlier step" : "new damage or crew availability"}. We will update you again if it changes.`,
     "Restored": "Your power is back. If it flickers or goes out again, please report it. Stay clear of any lines still down."};
   const keys = Object.keys(M2); $("mtabs").innerHTML = "";
   keys.forEach((k, i) => {
@@ -368,6 +789,11 @@ function initMap() {
       map.addSource("ce", {type: "geojson", data: {type: "FeatureCollection", features: D.cells.map(c => ({type: "Feature", properties: {n: c[2], d: c[3], c: c[4], h: c[2] * 3}, geometry: {type: "Polygon", coordinates: [[[c[0], c[1]], [c[0] + LON, c[1]], [c[0] + LON, c[1] + LAT], [c[0], c[1] + LAT], [c[0], c[1]]]]}}))}});
       map.addSource("dm", {type: "geojson", data: {type: "FeatureCollection", features: D.dmg.map(d => ({type: "Feature", properties: {e: d[2]}, geometry: {type: "Point", coordinates: [d[0], d[1]]}}))}});
       map.addSource("dv", {type: "geojson", data: {type: "FeatureCollection", features: D.dev.map(d => ({type: "Feature", properties: {t: d[2]}, geometry: {type: "Point", coordinates: [d[0], d[1]]}}))}});
+      map.addSource("priority-facilities", {type: "geojson", data: {type: "FeatureCollection", features: MAP_FACILITIES.map(([kind, id, circuit, lon, lat]) => ({
+        type: "Feature",
+        properties: {kind, id, circuit},
+        geometry: {type: "Point", coordinates: [lon, lat]},
+      }))}});
       map.addSource("pm", {type: "geojson", data: {type: "FeatureCollection", features: []}});
       const dmgCol = ["interpolate", ["linear"], ["get", "d"], 0, "#c9ced3", 1, "#f4a6ad", 3, "#e0525e", 6, "#a50f1e"];
       map.addLayer({id: "ce", type: "fill-extrusion", source: "ce", paint: {"fill-extrusion-color": dmgCol, "fill-extrusion-height": ["get", "h"], "fill-extrusion-opacity": .35}});
@@ -378,7 +804,20 @@ function initMap() {
       map.addLayer({id: "dv", type: "circle", source: "dv", paint: {"circle-radius": 3.6, "circle-color": ["match", ["get", "t"], 0, "#1f6b3a", "#2f5fa8"], "circle-stroke-color": "#fff", "circle-stroke-width": .6}});
       map.addLayer({id: "pr", type: "circle", source: "pm", paint: {"circle-radius": 11, "circle-color": "rgba(17,17,17,0.08)", "circle-stroke-color": "#111", "circle-stroke-width": 2}});
       map.addLayer({id: "pd", type: "circle", source: "pm", paint: {"circle-radius": 4.5, "circle-color": "#111"}});
+      map.addLayer({id: "priority-facilities", type: "circle", source: "priority-facilities", paint: {
+        "circle-radius": 7,
+        "circle-color": ["match", ["get", "kind"], "hospital", "#c2185b", "police", "#2864dc", "fire", "#e87513", "#555"],
+        "circle-stroke-color": "#fff",
+        "circle-stroke-width": 1.5,
+      }});
       map.on("click", "ce", e => { const f = e.features[0].properties, i = $("cellinfo"); i.style.display = "block"; i.textContent = f.n + " customers · " + f.d + " damage records in this ≈400 m bin"; });
+      map.on("click", "priority-facilities", e => {
+        const f = e.features[0].properties, info = $("cellinfo");
+        info.style.display = "block";
+        info.textContent = `${f.id} · nearest mapped circuit C-${f.circuit} (proximity only; connection unconfirmed)`;
+      });
+      map.on("mouseenter", "priority-facilities", () => { map.getCanvas().style.cursor = "pointer"; });
+      map.on("mouseleave", "priority-facilities", () => { map.getCanvas().style.cursor = ""; });
       mapReady = true; render(); focusMap();
     });
     map.on("error", () => {});
@@ -412,10 +851,15 @@ function drawFb() {
   g.fillStyle = "#eceff1"; g.fillRect(0, 0, c.width, c.height);
   D.lines.forEach((Ls, i) => { g.strokeStyle = i === p.c ? COL[bandOf(risk(p, readStorm()).P)] : "#b3b8bd"; g.lineWidth = i === p.c ? 2.2 : .7; Ls.forEach(a => { g.beginPath(); for (let j = 0; j < a.length; j += 2) j ? g.lineTo(sx(a[j]), sy(a[j + 1])) : g.moveTo(sx(a[0]), sy(a[1])); g.stroke(); }); });
   D.dmg.forEach(d => { g.fillStyle = ["#d71920", "#111", "#8a8f94"][d[2]]; g.fillRect(sx(d[0]) - 1.5, sy(d[1]) - 1.5, 3, 3); });
+  const facilityColors = {hospital: "#c2185b", police: "#2864dc", fire: "#e87513"};
+  MAP_FACILITIES.forEach(([kind, , , lon, lat]) => {
+    g.beginPath(); g.arc(sx(lon), sy(lat), 5, 0, 2 * Math.PI);
+    g.fillStyle = facilityColors[kind]; g.fill(); g.strokeStyle = "#fff"; g.lineWidth = 1.5; g.stroke();
+  });
   g.strokeStyle = "#111"; g.lineWidth = 2; g.beginPath(); g.arc(sx(p.p[0]), sy(p.p[1]), 9, 0, 7); g.stroke();
   g.fillStyle = "#5f6368"; g.font = "12px sans-serif"; g.fillText("3D map unavailable in this browser; showing 2D circuit view", 10, 18);
 }
-$("leg").innerHTML = `<i style="background:#d71920"></i>Feb 2025 damage <i style="background:#111;margin-left:6px"></i>Sep 2024 <i style="background:#8a8f94;margin-left:6px"></i>Other<br><i style="background:#1f6b3a"></i>Recloser <i style="background:#2f5fa8;margin-left:6px"></i>Switch · bold line = your circuit, colored by risk`;
+$("leg").innerHTML = `<i style="background:#d71920"></i>Feb 2025 damage <i style="background:#111;margin-left:6px"></i>Sep 2024 <i style="background:#8a8f94;margin-left:6px"></i>Other<br><i style="background:#1f6b3a"></i>Recloser <i style="background:#2f5fa8;margin-left:6px"></i>Switch · bold line = your circuit, colored by risk<br><i style="background:#c2185b"></i>Hospital <i style="background:#2864dc;margin-left:6px"></i>Police station <i style="background:#e87513;margin-left:6px"></i>Fire station`;
 $("b3d").onclick = () => { if (map && mapReady) map.easeTo({pitch: map.getPitch() > 10 ? 0 : 58, bearing: map.getPitch() > 10 ? 0 : -18, duration: 700}); };
 $("bfit").onclick = focusMap;
 document.querySelectorAll(".inp,#pm,#lv_d,#lv_v,#lv_c").forEach(e => e.addEventListener("input", render));
