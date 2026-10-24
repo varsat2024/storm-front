@@ -1,1 +1,10 @@
 /data/extracted/
+
+# Challenge GIS / topology — keep locally; use data/storm_raw_archive.zip or per-layer zips
+/data/storm_raw_archive.zip
+/data/raw/*.zip
+/data/raw/Data1/**
+!/data/raw/Data1/README.md
+/data/raw/Data2/**
+!/data/raw/Data2/README.md
+/data/raw/matched_upstream/**
