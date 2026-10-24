@@ -1,2 +1,4 @@
 /artifacts/
 /data/
+.env
+backend/.env
