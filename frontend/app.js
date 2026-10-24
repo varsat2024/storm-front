@@ -92,10 +92,108 @@ function restoration() {
   return {S, sevMult, extrap, dir, mult, tot, cr, blocked, bLo, bHi, hist, early, lo, hi, hasDamage: tot > 0, neverPct};
 }
 
+function scorePriorityCircuits(o) {
+  const maxOf = selector => Math.max(1, ...D.circ.map(selector));
+  const densityMax = maxOf(c => Math.max(0, c.f[0]));
+  const customerMax = maxOf(c => Math.log1p(c.n));
+  const reportMax = maxOf(c => Math.log1p(c.feb + c.sep + c.oth));
+  const facilityWeightMax = Math.max(
+    1,
+    ...facilityCountsByCircuit.map(c => c.hospitals * 3 + c.police * 2 + c.fire),
+  );
+  const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+  const median = values => {
+    const sorted = values.slice().sort((a, b) => a - b);
+    const middle = Math.floor(sorted.length / 2);
+    return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+  };
+  const riskReference = median(D.circ.map((circuit, i) =>
+    risk({c: i, f: circuit.f, nd: 1, z: TYPICAL_ZONE}, o).P,
+  ));
+  const densityReference = median(D.circ.map(circuit => Math.exp(circuit.f[0])));
+  const customerReference = median(D.circ.map(circuit => circuit.n));
+  const stormSeverity = sevCalc(o).S;
+  const severityMultiplier = stormSeverity > 0
+    ? Math.pow(stormSeverity, R.severity_scaling.beta)
+    : 123 / 228.5;
+  const crews = Math.max(1, Math.round(num("cr")));
+  const crewOptions = [...new Set([1, 2, 4, crews])].sort((a, b) => a - b);
+
+  return D.circ.map((circuit, i) => {
+    const counts = facilityCountsByCircuit[i];
+    const riskProbability = risk({c: i, f: circuit.f, nd: 1, z: TYPICAL_ZONE}, o).P;
+    const riskFactor = clamp(riskProbability / Math.max(riskReference, 0.001), 0.5, 2);
+    const densityFactor = clamp(Math.exp(circuit.f[0]) / Math.max(densityReference, 1), 0.5, 2);
+    const customerFactor = clamp(Math.sqrt(circuit.n / Math.max(customerReference, 1)), 0.5, 2);
+    const circuitFactor = 0.4 * riskFactor + 0.3 * densityFactor + 0.3 * customerFactor;
+    const facilityCount = counts.hospitals + counts.police + counts.fire;
+    const facilityAllowanceMinutes = facilityCount * 2;
+    const typicalStormMinutes = 228.5 * severityMultiplier;
+    const crewDurations = crewOptions.map(crewCount => ({
+      crews: crewCount,
+      minutes: typicalStormMinutes * circuitFactor / Math.sqrt(crewCount) + facilityAllowanceMinutes,
+    }));
+    const restorationMinutes = crewDurations.find(duration => duration.crews === crews).minutes;
+    const weightedFacilities = counts.hospitals * 3 + counts.police * 2 + counts.fire;
+    const points = {
+      facilities: 35 * weightedFacilities / facilityWeightMax,
+      risk: 20 * riskProbability,
+      density: 15 * Math.max(0, circuit.f[0]) / densityMax,
+      customers: 10 * Math.log1p(circuit.n) / customerMax,
+      history: 20 * Math.log1p(circuit.feb + circuit.sep + circuit.oth) / reportMax,
+    };
+    return {
+      circuit: i + 1,
+      counts,
+      customers: circuit.n,
+      reportedDamage: circuit.feb + circuit.sep + circuit.oth,
+      riskProbability,
+      restorationMinutes,
+      crewDurations,
+      restorationFactors: {
+        risk: riskFactor,
+        density: densityFactor,
+        customers: customerFactor,
+        combinedCircuit: circuitFactor,
+        stormSeverity: severityMultiplier,
+        facilityCount,
+        facilityAllowanceMinutes,
+        crews,
+        typicalStormMinutes,
+      },
+      points,
+      score: Object.values(points).reduce((sum, value) => sum + value, 0),
+    };
+  }).sort((a, b) => b.score - a.score || a.circuit - b.circuit);
+}
+
+function formatDurationMinutes(minutes) {
+  const rounded = Math.max(5, Math.round(minutes / 5) * 5);
+  if (rounded < 60) return `${rounded} min`;
+  const hours = Math.floor(rounded / 60), remainder = rounded % 60;
+  return remainder ? `${hours} h ${remainder} min` : `${hours} h`;
+}
+
 // ---------------------------------------------------------------- setup
+const facilityCountsByCircuit = Array.from({length: D.circ.length}, (_, i) => {
+  const circuit = i + 1;
+  return {
+    hospitals: (D.hospitals || []).filter(f => f.c === circuit).length,
+    police: (D.police_stations || []).filter(f => f.c === circuit).length,
+    fire: (D.fire_stations || []).filter(f => f.c === circuit).length,
+  };
+});
 D.prem.forEach((p, i) => {
   const o = document.createElement("option");
-  o.value = i; o.textContent = p.id + " · circuit C-" + (p.c + 1) + " · " + p.cn + " customers in cell";
+  const facilities = facilityCountsByCircuit[p.c] || {hospitals: 0, police: 0, fire: 0};
+  o.value = i;
+  const countLabel = (count, singular, plural) => `${count} ${count === 1 ? singular : plural}`;
+  const included = [
+    facilities.hospitals && countLabel(facilities.hospitals, "hospital", "hospitals"),
+    facilities.police && countLabel(facilities.police, "police station", "police stations"),
+    facilities.fire && countLabel(facilities.fire, "fire station", "fire stations"),
+  ].filter(Boolean);
+  o.textContent = `${p.id} · circuit C-${p.c + 1} · ${p.cn} customers in cell${included.length ? ` · includes ${included.join(", ")}` : ""}`;
   $("pm").appendChild(o);
 });
 R.groups.length && ["Primary wire"].concat(R.groups).forEach(g => {
@@ -219,6 +317,25 @@ confidence = <b>${conf}</b></div></div></div>`;
 function renderRest(p, x, rs, range) {
   const H = rs.hist;
   const aft = R.terms.filter(t => t.selected && t.name.startsWith("asset:"));
+  const priorities = scorePriorityCircuits(readStorm());
+  const scorePart = (value, max) => `${value.toFixed(1)}/${max}`;
+  const priorityRows = priorities.map((circuit, index) => {
+    const parts = circuit.points;
+    const factors = circuit.restorationFactors;
+    const durationList = circuit.crewDurations.map(({crews, minutes}) =>
+      `<div><b>${crews} crew${crews === 1 ? "" : "s"}${crews === factors.crews ? " (selected)" : ""}:</b> ${formatDurationMinutes(minutes)}</div>`,
+    ).join("");
+    const facilities = [
+      circuit.counts.hospitals && `${circuit.counts.hospitals} hospital${circuit.counts.hospitals === 1 ? "" : "s"}`,
+      circuit.counts.police && `${circuit.counts.police} police station${circuit.counts.police === 1 ? "" : "s"}`,
+      circuit.counts.fire && `${circuit.counts.fire} fire station${circuit.counts.fire === 1 ? "" : "s"}`,
+    ].filter(Boolean);
+    const explanation = `Storm base ${formatDurationMinutes(factors.typicalStormMinutes)} × circuit factor ${factors.combinedCircuit.toFixed(2)} (risk ${factors.risk.toFixed(2)}, density ${factors.density.toFixed(2)}, customers ${factors.customers.toFixed(2)}) ÷ √crews; ${factors.facilityCount} mapped facilities add ${factors.facilityAllowanceMinutes} min.`;
+    return `<tr><td class="r">${index + 1}</td><td class="r"><b>${circuit.score.toFixed(1)}</b></td><td>C-${circuit.circuit}</td><td>${facilities.length ? facilities.join(", ") : "None mapped"}</td>
+<td class="r">${circuit.customers.toLocaleString()}</td><td class="r">${pc(circuit.riskProbability)}</td><td class="r">${circuit.reportedDamage}</td>
+<td class="duration-cell">${durationList}</td><td>${explanation}</td>
+<td>Facilities ${scorePart(parts.facilities, 35)} · risk ${scorePart(parts.risk, 20)} · density ${scorePart(parts.density, 15)} · customers ${scorePart(parts.customers, 10)} · historical reports ${scorePart(parts.history, 20)}</td></tr>`;
+  }).join("");
   $("rest").innerHTML = `<h2>Restoration estimate</h2><div style="font-size:28px;font-weight:700">${range}</div>
 <div class="mu">after crews can safely start. Model estimate, not a promise. ${rs.early ? "Damage is beyond your nearest protective device, so crews can isolate it and restore you in an earlier step (rule: between the fast and median historical repair)." : ""}</div>
 <div class="two" style="margin-top:12px"><div><h3 style="margin-top:0">Historical completion ${chip("learned")}</h3>
@@ -227,6 +344,19 @@ function renderRest(p, x, rs, range) {
 <div><h3 style="margin-top:0">Bottom-up labor ${chip("reference")}</h3>
 <div class="mu">Workbook hours x indirect multiplier ÷ crew.</div>
 ${rs.hasDamage ? `<table><tr><td>Direct repair labor</td><td class="r">${f2(rs.dir, 1)} h</td></tr><tr><td>x multiplier ${f2(rs.mult, 1)}</td><td class="r">${f2(rs.tot, 0)} labor-h</td></tr><tr><td>÷ crew of ${rs.cr} (crew size ±1)</td><td class="r">${hrs(rs.bLo)}-${hrs(rs.bHi)}</td></tr>${rs.hasDamage ? `<tr><td>x storm severity ${f2(rs.S)}<sup>${f2(R.severity_scaling.beta, 2)}</sup> = ${f2(rs.sevMult, 2)}</td><td class="r"></td></tr>` : ""}${rs.blocked ? `<tr><td>Blocked access ${chip("assumption")}</td><td class="r">+2-8 h</td></tr>` : ""}</table>` : `<div class="mu">No damage entered, so only the historical range is shown.</div>`}</div></div>
+<h3>Circuit priority ranking · illustrative score</h3>
+<div class="fact"><b>Circuit-level planning aid.</b> Each circuit receives one 0–100 score and is ranked once. The ranking does not change the household restoration estimate above.</div>
+<div class="mu">Score weights: mapped priority facilities (35 points, weighted by type: hospital 3, police 2, fire 1), modeled outage risk for a typical 51-customer protection zone (20), customer density proxy (15; circuit-average log customers per 400 m cell), historical circuit damage reports (20), and circuit customer count (10). Non-risk quantities are normalized to the highest circuit in this dataset. These are illustrative planning weights, not utility policy. All ${priorities.length} circuits are ranked, including circuits with no mapped facilities.</div>
+<div class="mu" style="margin:6px 0">Facility counts use approximate nearest-line assignments, not confirmed electrical connections. Historical report counts are not live outage reports. The durations below are illustrative circuit-level planning estimates, not observed repair times or utility dispatch forecasts.</div>
+<div class="priority-table-wrap" style="margin-top:8px"><table class="priority-table"><thead><tr><th class="r">Rank</th><th class="r">Score</th><th>Circuit</th><th>Mapped priority facilities</th><th class="r">Customers</th><th class="r">Typical-zone risk</th><th class="r">Historical reports</th><th>Estimated restoration time by crew count</th><th>Why this estimate</th><th>Score contribution (points/max)</th></tr></thead><tbody>${priorityRows}</tbody></table></div>
+<div class="fact" style="margin-top:12px"><b>How the circuit-level duration estimate is formed</b>
+<div>Start with a storm-adjusted statewide benchmark, then scale by circuit risk, customer density, customer count, crew count, and a small facility allowance. Formula: <b>duration = storm base × (0.40 × relative risk + 0.30 × relative density + 0.30 × relative customer count) ÷ √crews + 2 minutes per mapped facility.</b> Relative risk, density, and customer-count factors are compared with the median circuit and bounded from 0.5× to 2× so one outlier cannot dominate.</div>
+<div class="mu" style="margin-top:6px">The storm base uses the EIA Virginia CAIDI references below (123 minutes without major events; 228.5 minutes including major events) and the model's severity scaling (power ${f2(R.severity_scaling.beta, 3)}; selected by cross-validation: ${R.severity_scaling.selected_by_cv ? "yes" : "no"}). When storm severity is zero it uses 123 minutes; at severity 1 it uses 228.5 minutes. Facility time is a small 2-minute-per-mapped-site assumption. Dividing by the square root of crew count is also an assumption; staffing productivity data is unavailable.</div>
+<b>Published duration references—not circuit-specific promises</b>
+<ul><li><a href="https://www.eia.gov/electricity/annual/html/epa_11_03.html" target="_blank" rel="noopener noreferrer">EIA 2025 Virginia reliability metrics</a>: average interruption restoration duration (CAIDI) was <b>123 minutes (2 h 3 min) without major events</b> and <b>228.5 minutes (3 h 49 min) with major events included</b>. These annual, statewide averages are a reference—not an event-specific range or a duration for each circuit.</li>
+<li><a href="https://www.appalachianpower.com/company/news/view?releaseID=12161" target="_blank" rel="noopener noreferrer">Appalachian Power, August 2026 back-to-back severe storms</a>: about 79,000 customers restored across 1,500+ outage locations; the company said the overwhelming majority were restored “within hours,” but did not give an exact completion time.</li>
+<li><a href="https://www.appalachianpower.com/company/news/view?releaseID=12256" target="_blank" rel="noopener noreferrer">Appalachian Power, Winter Storm Fern (January 2026)</a>: 76,306 outages, 185 poles and 91 transformers damaged, and about 3,000 field workers; the release does not state a full-restoration duration, so no extreme-event time is invented here.</li></ul>
+CAIDI measures customer interruption duration, not hands-on crew repair time. Circuit risk is a modeled probability, not a confirmed outage or repair queue.</div>
 <h3>How the two are combined ${chip("rule")}</h3>
 <div class="mu">Both are multiplied by the storm-severity factor ${f2(rs.sevMult, 2)} (severity ${f2(rs.S)}x Feb 2025, raised to the learned power).</div>
 <div class="formula">${rs.early ? "early step: low = historical P10, high = historical median" : "low = max(historical P10, bottom-up low)\nhigh = max(historical P90, bottom-up high)"}</div>
@@ -291,7 +421,7 @@ function renderMeth() {
 <table><tr><th>Design</th><th class="r">Held-out log-lik gain / record</th><th class="r">P10-P90 coverage (target 80%)</th></tr>${Object.keys(rc).map(k => `<tr><td>${k}${k === R.cv.selected ? " " + chip("learned") + " selected" : ""}</td><td class="r">${sg(rc[k].gain_vs_null_per_record, 4)}</td><td class="r">${pc(rc[k].coverage_p10_p90)}</td></tr>`).join("")}</table>
 <h3>Severity weights ${chip(SV.source)}</h3>
 <div class="${dg.severity_agrees_with_events ? "fact" : "warn"}">${SV.source === "prior" ? "No weather data reached the pipeline, so these weights are assumptions. " : ""}Illustrative Sep-2024-like weather implies severity ${f2(dg.severity_implied_sep_over_feb, 2)}x Feb 2025; the observed damage ratio between the events is ${f2(dg.observed_sep_over_feb_damage_ratio, 2)}x. ${dg.severity_agrees_with_events ? "These agree within 1.5x." : "They disagree by more than 1.5x, and the weather values for Sep 2024 are my guesses, so treat the severity scale as uncalibrated until weather data is fetched (weather.py) and the model is retrained."}</div>
-<h3>Privacy and fallback</h3><p>Premise IDs are re-numbered, the map shows only a ≈400 m cell, fire-station distance is banded, and only cell-level features reach the browser. No addresses, premise numbers, exact coordinates, crew details or sensitive-facility locations appear. Only declared flags are used. If a premise cannot be matched, the concierge should decline to estimate and point to the official outage map and phone line.</p>
+<h3>Privacy and fallback</h3><p>Premise IDs are re-numbered, the map shows only a ≈400 m cell, fire-station distance is banded, and only cell-level customer features reach the browser. Hospital, police, and fire-station markers use generic numbered labels and coarsened reference coordinates; facility names do not appear. Only declared flags are used. If a premise cannot be matched, the concierge should decline to estimate and point to the official outage map and phone line.</p>
 <h3>Retrain with new data</h3><div class="formula">python pipeline/run_pipeline.py --raw-dir data/raw --topology data/raw/matched_upstream.txt \\
     --labor data/raw/Install_Labor_HackOHIO.xlsx [--fetch-weather]</div>`;
 }
@@ -310,6 +440,12 @@ function initMap() {
       map.addSource("ce", {type: "geojson", data: {type: "FeatureCollection", features: D.cells.map(c => ({type: "Feature", properties: {n: c[2], d: c[3], c: c[4], h: c[2] * 3}, geometry: {type: "Polygon", coordinates: [[[c[0], c[1]], [c[0] + LON, c[1]], [c[0] + LON, c[1] + LAT], [c[0], c[1] + LAT], [c[0], c[1]]]]}}))}});
       map.addSource("dm", {type: "geojson", data: {type: "FeatureCollection", features: D.dmg.map(d => ({type: "Feature", properties: {e: d[2]}, geometry: {type: "Point", coordinates: [d[0], d[1]]}}))}});
       map.addSource("dv", {type: "geojson", data: {type: "FeatureCollection", features: D.dev.map(d => ({type: "Feature", properties: {t: d[2]}, geometry: {type: "Point", coordinates: [d[0], d[1]]}}))}});
+      const facilityFeatures = (items, kind) => (items || []).map(f => ({type: "Feature", properties: {id: f.id, c: f.c, distance_m: f.distance_m, kind}, geometry: {type: "Point", coordinates: f.p}}));
+      map.addSource("priority-facilities", {type: "geojson", data: {type: "FeatureCollection", features: [
+        ...facilityFeatures(D.hospitals, "hospital"),
+        ...facilityFeatures(D.police_stations, "police"),
+        ...facilityFeatures(D.fire_stations, "fire"),
+      ]}});
       map.addSource("pm", {type: "geojson", data: {type: "FeatureCollection", features: []}});
       const dmgCol = ["interpolate", ["linear"], ["get", "d"], 0, "#c9ced3", 1, "#f4a6ad", 3, "#e0525e", 6, "#a50f1e"];
       map.addLayer({id: "ce", type: "fill-extrusion", source: "ce", paint: {"fill-extrusion-color": dmgCol, "fill-extrusion-height": ["get", "h"], "fill-extrusion-opacity": .35}});
@@ -318,10 +454,19 @@ function initMap() {
       map.addLayer({id: "ls", type: "line", source: "ln", filter: ["==", ["get", "c"], -1], paint: {"line-color": "#111", "line-width": 3.2}});
       map.addLayer({id: "dm", type: "circle", source: "dm", paint: {"circle-radius": 3.2, "circle-color": ["match", ["get", "e"], 0, "#d71920", 1, "#111111", "#8a8f94"], "circle-stroke-color": "#fff", "circle-stroke-width": .6}});
       map.addLayer({id: "dv", type: "circle", source: "dv", paint: {"circle-radius": 3.6, "circle-color": ["match", ["get", "t"], 0, "#1f6b3a", "#2f5fa8"], "circle-stroke-color": "#fff", "circle-stroke-width": .6}});
+      map.addLayer({id: "priority-facilities", type: "circle", source: "priority-facilities", paint: {
+        "circle-radius": 7,
+        "circle-color": ["match", ["get", "kind"], "hospital", "#c2185b", "police", "#2864dc", "fire", "#e87513", "#555"],
+        "circle-stroke-color": "#fff",
+        "circle-stroke-width": 1.5,
+      }});
       map.addLayer({id: "pr", type: "circle", source: "pm", paint: {"circle-radius": 11, "circle-color": "rgba(17,17,17,0.08)", "circle-stroke-color": "#111", "circle-stroke-width": 2}});
       map.addLayer({id: "pd", type: "circle", source: "pm", paint: {"circle-radius": 4.5, "circle-color": "#111"}});
       map.on("click", "ce", e => { const f = e.features[0].properties, i = $("cellinfo"); i.style.display = "block"; i.textContent = f.n + " customers · " + f.d + " damage records in this ≈400 m bin"; });
-      mapReady = true; render(); focusMap();
+      map.on("click", "priority-facilities", e => { const f = e.features[0].properties, i = $("cellinfo"); i.style.display = "block"; i.textContent = f.id + " · nearest mapped circuit C-" + f.c + " (" + f.distance_m + " m; proximity only, connection unconfirmed)"; });
+      map.on("mouseenter", "priority-facilities", () => { map.getCanvas().style.cursor = "pointer"; });
+      map.on("mouseleave", "priority-facilities", () => { map.getCanvas().style.cursor = ""; });
+      mapReady = true; render(); focusMap(true);
     });
     map.on("error", () => {});
     setTimeout(() => { if (!mapReady) fallback(); }, 9000);
@@ -338,9 +483,16 @@ function updateMap(x, p, o, col) {
   map.setLayoutProperty("dv", "visibility", $("lv_v").checked ? "visible" : "none");
   const v = $("lv_c").checked ? "visible" : "none"; map.setLayoutProperty("ce", "visibility", v); map.setLayoutProperty("cs", "visibility", v);
 }
-function focusMap() {
+function focusMap(includeFacilities = false) {
   const p = D.prem[$("pm").value], b = D.circ[p.c].b;
-  if (map && mapReady) map.fitBounds([[b[0], b[1]], [b[2], b[3]]], {padding: 50, duration: 1200, pitch: map.getPitch() || 58, maxZoom: 12.5});
+  if (map && mapReady) {
+    let west = b[0], south = b[1], east = b[2], north = b[3];
+    if (includeFacilities) [...(D.hospitals || []), ...(D.police_stations || []), ...(D.fire_stations || [])].forEach(f => {
+      west = Math.min(west, f.p[0]); south = Math.min(south, f.p[1]);
+      east = Math.max(east, f.p[0]); north = Math.max(north, f.p[1]);
+    });
+    map.fitBounds([[west, south], [east, north]], {padding: 50, duration: 1200, pitch: map.getPitch() || 58, maxZoom: 12.5});
+  }
 }
 function fallback() {
   if (fb || mapReady) return; fb = true;
@@ -354,10 +506,16 @@ function drawFb() {
   g.fillStyle = "#eceff1"; g.fillRect(0, 0, c.width, c.height);
   D.lines.forEach((Ls, i) => { g.strokeStyle = i === p.c ? COL[bandOf(risk(p, readStorm()).P)] : "#b3b8bd"; g.lineWidth = i === p.c ? 2.2 : .7; Ls.forEach(a => { g.beginPath(); for (let j = 0; j < a.length; j += 2) j ? g.lineTo(sx(a[j]), sy(a[j + 1])) : g.moveTo(sx(a[0]), sy(a[1])); g.stroke(); }); });
   D.dmg.forEach(d => { g.fillStyle = ["#d71920", "#111", "#8a8f94"][d[2]]; g.fillRect(sx(d[0]) - 1.5, sy(d[1]) - 1.5, 3, 3); });
+  const facilities = [
+    ...(D.hospitals || []).map(f => [f, "#c2185b"]),
+    ...(D.police_stations || []).map(f => [f, "#2864dc"]),
+    ...(D.fire_stations || []).map(f => [f, "#e87513"]),
+  ];
+  facilities.forEach(([f, color]) => { g.beginPath(); g.arc(sx(f.p[0]), sy(f.p[1]), 6, 0, Math.PI * 2); g.fillStyle = color; g.fill(); g.strokeStyle = "#fff"; g.lineWidth = 1.5; g.stroke(); });
   g.strokeStyle = "#111"; g.lineWidth = 2; g.beginPath(); g.arc(sx(p.p[0]), sy(p.p[1]), 9, 0, 7); g.stroke();
   g.fillStyle = "#5f6368"; g.font = "12px sans-serif"; g.fillText("3D map unavailable in this browser; showing 2D circuit view", 10, 18);
 }
-$("leg").innerHTML = `<i style="background:#d71920"></i>Feb 2025 damage <i style="background:#111;margin-left:6px"></i>Sep 2024 <i style="background:#8a8f94;margin-left:6px"></i>Other<br><i style="background:#1f6b3a"></i>Recloser <i style="background:#2f5fa8;margin-left:6px"></i>Switch · bold line = your circuit, colored by risk`;
+$("leg").innerHTML = `<i style="background:#d71920"></i>Feb 2025 damage <i style="background:#111;margin-left:6px"></i>Sep 2024 <i style="background:#8a8f94;margin-left:6px"></i>Other<br><i style="background:#1f6b3a"></i>Recloser <i style="background:#2f5fa8;margin-left:6px"></i>Switch<br><i style="background:#c2185b"></i>Hospital <i style="background:#2864dc;margin-left:6px"></i>Police station <i style="background:#e87513;margin-left:6px"></i>Fire station · bold line = your circuit, colored by risk`;
 $("b3d").onclick = () => { if (map && mapReady) map.easeTo({pitch: map.getPitch() > 10 ? 0 : 58, bearing: map.getPitch() > 10 ? 0 : -18, duration: 700}); };
 $("bfit").onclick = focusMap;
 document.querySelectorAll(".inp,#pm,#lv_d,#lv_v,#lv_c").forEach(e => e.addEventListener("input", render));
