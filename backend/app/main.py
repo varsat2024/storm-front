@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.routers import chat
+from app.routers import chat, status
 
 app = FastAPI(
     title="AI Outage Concierge API",
@@ -19,6 +19,7 @@ app.add_middleware(
 )
 
 app.include_router(chat.router)
+app.include_router(status.router)
 
 
 @app.get("/health")

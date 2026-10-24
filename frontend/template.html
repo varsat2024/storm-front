@@ -46,6 +46,21 @@
 <section id="t_prep" hidden><div class="card" id="prep"></div></section>
 <section id="t_msg" hidden><div class="card"><h2>Alert eligibility</h2><div id="alert"></div></div><div class="card" style="margin-top:14px"><h2>Proactive messages</h2><div class="chips" id="mtabs"></div><div class="msg" id="msg"></div></div></section>
 <section id="t_meth" hidden><div class="card" id="why"></div></section>
+<section id="t_ast" hidden>
+<div class="card"><h2>Assistant</h2>
+<div class="mu">Ask about outage risk, weather, upstream feeder effects, and restoration. Uses the API at <code>/chat</code> and loads location context from your address (sidebar storm and damage settings are included).</div>
+<label for="chat_api"><span>API base URL</span></label>
+<input type="text" id="chat_api" class="inp" value="http://127.0.0.1:8000">
+<label for="chat_addr"><span>Your address (US)</span></label>
+<input type="text" id="chat_addr" class="inp" placeholder="123 Main St, Roanoke, VA">
+<div class="chat-log" id="chat" aria-live="polite"></div>
+<div class="chat-compose">
+<input type="text" id="q" class="inp" placeholder="Will I lose power if the storm is worse upstream on my feeder?" autocomplete="off">
+<button type="button" class="btn" id="q_send">Send</button>
+</div>
+<p class="mu" id="chat_status"></p>
+</div>
+</section>
 </main></div>
 <footer>Demo for the Hack/OHIO 2026 AEP challenge. Estimates are model output, not confirmed utility information. In an emergency call 911.</footer>
 <script>
