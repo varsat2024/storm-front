@@ -300,29 +300,54 @@ const MAP_FACILITIES = [
   ["fire", "Fire Station 37", 57, -80.01, 37.267],
 ];
 
-function scheduleTeamTasks(tasks, teamCount) {
-  const availableAt = Array(teamCount).fill(0);
-  const completions = new Map();
-  const starts = new Map();
-  const pending = tasks.slice().sort((a, b) =>
-    a.readyAt - b.readyAt ||
-    b.duration - a.duration ||
-    b.priority - a.priority ||
-    a.id.localeCompare(b.id),
-  );
-
-  pending.forEach(task => {
-    let team = 0;
-    for (let i = 1; i < availableAt.length; i++) {
-      if (availableAt[i] < availableAt[team]) team = i;
-    }
-    const start = Math.max(availableAt[team], task.readyAt);
-    const finish = start + task.duration;
-    availableAt[team] = finish;
+// Priority-dispatch list scheduling: whenever a team frees up, it takes the ready task of the highest-priority premise (lowest rank).
+// If nothing is ready yet it waits for the next task to become ready. `initial` lets a pool continue from earlier work.
+function scheduleTeamTasks(tasks, teamCount, initial) {
+  // Same dispatch rule as before, but O(n log n): a heap of free teams, tasks sorted by readyAt, and a heap of ready tasks.
+  const avail = initial ? initial.slice() : Array(teamCount).fill(0);
+  const teams = new Heap((a, b) => avail[a] - avail[b] || a - b);
+  avail.forEach((_, i) => teams.push(i));
+  const byReady = tasks.slice().sort((a, b) => a.readyAt - b.readyAt);
+  const ready = new Heap((a, b) => a.rank - b.rank || b.duration - a.duration || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  const completions = new Map(), starts = new Map();
+  let next = 0;
+  for (let done = 0; done < byReady.length; done++) {
+    const team = teams.pop();
+    let t = avail[team];
+    if (!ready.size && next < byReady.length && byReady[next].readyAt > t) t = byReady[next].readyAt;   // nothing ready: wait for the next task
+    while (next < byReady.length && byReady[next].readyAt <= t + 1e-9) ready.push(byReady[next++]);
+    const task = ready.pop();
+    const start = Math.max(t, task.readyAt), finish = start + task.duration;
+    avail[team] = finish;
+    teams.push(team);
     starts.set(task.id, start);
     completions.set(task.id, finish);
-  });
-  return {completions, starts};
+  }
+  return {completions, starts, availableAt: avail};
+}
+
+function Heap(cmp) {   // cmp(a, b) < 0 when a should come out first
+  const a = [], less = (x, y) => cmp(x, y) < 0;
+  Object.defineProperty(this, "size", {get: () => a.length});
+  this.push = v => {
+    let i = a.push(v) - 1;
+    while (i > 0) { const q = (i - 1) >> 1; if (!less(a[i], a[q])) break; [a[i], a[q]] = [a[q], a[i]]; i = q; }
+  };
+  this.pop = () => {
+    const top = a[0], last = a.pop();
+    if (a.length) {
+      a[0] = last;
+      let i = 0;
+      for (;;) {
+        const l = 2 * i + 1, r = l + 1; let m = i;
+        if (l < a.length && less(a[l], a[m])) m = l;
+        if (r < a.length && less(a[r], a[m])) m = r;
+        if (m === i) break;
+        [a[i], a[m]] = [a[m], a[i]]; i = m;
+      }
+    }
+    return top;
+  };
 }
 
 function splitExpectedWork(expected) {
@@ -332,7 +357,9 @@ function splitExpectedWork(expected) {
   return units;
 }
 
+let FAC_CACHE = null;
 function premiseFacilityCounts() {
+  if (FAC_CACHE) return FAC_CACHE;
   const counts = new Map(D.prem.map(premise => [
     premise.id,
     {hospitals: 0, police: 0, fire: 0},
@@ -349,7 +376,7 @@ function premiseFacilityCounts() {
     else if (kind === "police") entry.police++;
     else if (kind === "fire") entry.fire++;
   });
-  return counts;
+  return (FAC_CACHE = counts);
 }
 
 const PREMISE_CELL_DAMAGE = new Map(D.prem.map(premise => {
@@ -369,6 +396,7 @@ function premiseDamageEstimate(premise, o) {
   const expectedRecords = premise.cn * rate;
   return {
     probability: sv.zero ? 0 : pNB(expectedRecords, O.alpha),
+    expectedRecords: sv.zero ? 0 : expectedRecords,   // expected number of damage records; unlike the probability, it keeps growing with storm severity
     rate,
     zero: sv.zero,
   };
@@ -435,72 +463,116 @@ function scorePriorityPremises(o) {
   }).sort((a, b) => b.score - a.score || a.premise.id.localeCompare(b.premise.id));
 }
 
-function scheduleAllPremises(o) {
-  const mix = [
-    {name: "Wire", share: 130 / 240, asset: null, team: "line"},
-    {name: "Switch", share: 53 / 240, asset: "Other", team: "protection"},
-    {name: "Pole", share: 52 / 240, asset: "Pole", team: "line"},
-    {name: "Equipment", share: 5 / 240, asset: "Transformer", team: "equipment"},
+// Repair mix from the pipeline (Feb 2025 ARCOS records by asset group), folded into the four crew types.
+const REPAIR_MIX = (() => {
+  const g = DM.groups, v = k => g[k] || 0;
+  const raw = [
+    {name: "Wire", share: v("Primary wire") + v("Secondary wire"), item: "wire", team: "line"},
+    {name: "Switch", share: v("Fuse bank") + v("Other"), item: "rec", team: "protection"},   // fuse banks use the recloser hours; "Other" joins them
+    {name: "Pole", share: v("Pole"), item: "pole", team: "line"},
+    {name: "Equipment", share: v("Transformer"), item: "xf", team: "equipment"},
   ];
+  const tot = raw.reduce((a, t) => a + t.share, 0) || 1;
+  return raw.map(t => ({...t, share: t.share / tot}));
+})();
+// Field delays (explicit, editable assumptions; none of these are fitted to data). All times in hours.
+const DELAYS = {
+  travelPerJob: 0.75,            // drive, access and set-up per repair job (scaled by the job's expected weight)
+  travelPerInspection: 0.5,      // drive and access per site inspection
+  materials: {Wire: 1, Switch: 2, Pole: 2.5, Equipment: 2.5},   // staging / pulling materials before a repair can start
+  workHoursPerDay: 16,           // crews work 16 h, then rest 8 h (shift/rest limits), on a shared 24 h clock
+};
+// The schedule runs in productive crew hours; this converts to wall-clock time by inserting the rest periods.
+function toWallClock(work) {
+  const d = DELAYS.workHoursPerDay;
+  return Math.floor(work / d + 1e-12) * 24 + (work % d);
+}
+// Work time of one repair job = workbook labor hours x indirect multiplier / people on the team.
+function jobHours(type) {
+  const W = RESPONSE_WORKFORCE, size = W.people[type.team] / W.teams[type.team];
+  return L.items[type.item].hours * Math.max(1, num("mu")) / size;
+}
+
+let SCHED_KEY = "", SCHED_VAL = null;
+// Unmodeled latency (hours before the response is fully under way: storm still active, safe-to-work wait, dispatch, mobilization,
+// outage reporting, sequential upstream-first switching). The explicit schedule above ignores these and, with 1,000 workers against a
+// few hundred expected jobs, is never resource-limited, so it lands far below the historical record. This one number is calibrated so
+// that the job-weighted median completion at the reference storm (Feb 2025, severity 1) equals the trained AFT baseline median,
+// then scaled to other storms by the same learned severity slope (S^beta) the AFT model uses. It is recomputed whenever the model or
+// the labor multiplier changes, so retraining updates it. Zero severity still gives zero.
+let LAG_KEY = "", LAG_VAL = {lag0: 0, med: 0, target: 0};
+function referenceStorm() {
+  const t = SV.terms;
+  return {gust: t[0].ref, rain: t[1].ref, snow: t[2].ref, ante: t[3].ref, leaf: t[4].ref};
+}
+function latencyCalibration() {
+  const key = String(num("mu"));
+  if (key === LAG_KEY) return LAG_VAL;
+  const sc = scheduleAllPremisesRaw(referenceStorm(), 0);
+  const act = sc.premises.filter(q => !q.idle).sort((a, b) => a.completion - b.completion);
+  const total = act.reduce((a, q) => a + q.expectedJobs, 0);
+  let acc = 0, med = 0;
+  for (const q of act) { acc += q.expectedJobs; if (acc >= total / 2) { med = q.completion; break; } }
+  const target = Math.exp(R.terms[0].beta) * 24;   // trained AFT baseline median at severity 1 (hours)
+  LAG_KEY = key; LAG_VAL = {lag0: Math.max(0, target - med), med, target};
+  return LAG_VAL;
+}
+function scheduleAllPremises(o) {
+  const key = JSON.stringify(o) + "|" + num("mu");
+  if (key === SCHED_KEY) return SCHED_VAL;
+  const S = sevCalc(o).S, lag = S > 0 ? latencyCalibration().lag0 * Math.pow(S, R.severity_scaling.beta) : 0;
+  SCHED_VAL = scheduleAllPremisesRaw(o, lag); SCHED_KEY = key;
+  SCHED_VAL.latencyHours = lag;
+  return SCHED_VAL;
+}
+function scheduleAllPremisesRaw(o, lag) {
+  const mix = REPAIR_MIX;
   const weather = sevCalc(o);
-  const baseMedianHours = Number(R.baseline_days["0.5"]) * 24;
   const premises = scorePriorityPremises(o).map(priority => {
-    const riskProbability = priority.riskProbability;
-    const facilities = {
-      hospital: priority.counts.hospitals,
-      police: priority.counts.police,
-      fire: priority.counts.fire,
-    };
     const idle = weather.zero;   // no storm at all: nothing to inspect or repair. There is no minimum risk level.
+    const jobs = idle ? 0 : priority.damageEstimate.expectedRecords;   // expected damage records for this premise's area
     return {
       ...priority,
-      outageRisk: riskProbability,
+      outageRisk: priority.riskProbability,
       idle,
       damageProbability: idle ? 0 : priority.damageEstimate.probability,
-      facilities,
-      modeledRepairHours: idle ? 0 : mix.reduce((hours, type) => {
-        const assetTerm = type.asset && R.terms.find(term => term.name === `asset:${type.asset}`);
-        const durationPerJob = baseMedianHours * Math.exp(assetTerm ? assetTerm.beta : 0);
-        return hours + priority.damageEstimate.probability * type.share * durationPerJob;
-      }, 0),
+      expectedJobs: jobs,
+      facilities: {hospital: priority.counts.hospitals, police: priority.counts.police, fire: priority.counts.fire},
+      modeledRepairHours: mix.reduce((hours, type) => hours + jobs * type.share * jobHours(type), 0),
       teams: {assessment: 0, detailedAssessment: 0, tree: 0, line: 0, protection: 0, equipment: 0},
-      visitStart: 0,
-      inspectionComplete: 0,
-      inspectionDuration: idle ? 0 : 0.5 + priority.damageSeverityScore / 200 +
-        priority.facilityAllowanceMinutes / 60,
-      repairStart: null,
-      repairDuration: 0,
-      visitDuration: 0,
-      completion: null,
-      categoryJobs: {},
+      visitStart: 0, inspectionComplete: 0, rank: 0,
+      inspectionDuration: idle ? 0 : DELAYS.travelPerInspection + 0.5 + priority.damageSeverityScore / 200 + priority.facilityAllowanceMinutes / 60,
+      repairStart: null, repairDuration: 0, visitDuration: 0, completion: null, categoryJobs: {},
     };
   });
-  const maxRepairHours = Math.max(1, ...premises.map(premise => premise.modeledRepairHours));
   const activePremises = premises.filter(premise => !premise.idle);
-  activePremises.sort((a, b) => {
-    const dispatchValue = premise =>
-      0.9 * premise.modeledRepairHours / maxRepairHours +
-      0.1 * premise.score / 100;
-    return dispatchValue(b) - dispatchValue(a) || b.score - a.score ||
-      a.premise.id.localeCompare(b.premise.id);
-  });
   const idlePremises = premises.filter(premise => premise.idle);
-  let taskSequence = 0;
-  let elapsed = 0;
-  const assessmentTasks = [], treeTasks = [], repairTasks = [];
+  // Dispatch order: Smith's rule (priority points per hour of work), which minimizes the priority-weighted completion time.
+  activePremises.sort((a, b) => {
+    const ratio = premise => (premise.score + 1) / (premise.inspectionDuration + premise.modeledRepairHours + 0.05);
+    return ratio(b) - ratio(a) || b.score - a.score || a.premise.id.localeCompare(b.premise.id);
+  });
+  activePremises.forEach((premise, index) => { premise.rank = index; });
+  // 1. Site inspections, in parallel on the assessment teams (the pool is shared with the detailed assessments below).
+  const inspections = scheduleTeamTasks(
+    activePremises.map(premise => ({id: premise.premise.id, rank: premise.rank, readyAt: 0, duration: premise.inspectionDuration})),
+    RESPONSE_WORKFORCE.teams.assessment,
+  );
   activePremises.forEach(premise => {
-    premise.visitStart = elapsed;
-    premise.inspectionComplete = premise.visitStart + premise.inspectionDuration;
+    premise.visitStart = inspections.starts.get(premise.premise.id);
+    premise.inspectionComplete = inspections.completions.get(premise.premise.id);
     premise.teams.assessment = 1;
     premise.completion = premise.inspectionComplete;
-    elapsed = premise.inspectionComplete;
+  });
+  // 2. Turn each premise's expected damage into assessment, tree-clearing and repair tasks.
+  let taskSequence = 0;
+  const assessmentTasks = [], treeTasks = [], repairTasks = [];
+  activePremises.forEach(premise => {
     mix.forEach(type => {
-      const expectedTypeWork = premise.damageProbability * type.share;
+      const expectedTypeWork = premise.expectedJobs * type.share;
       premise.categoryJobs[type.name] = expectedTypeWork;
-      const assetTerm = type.asset && R.terms.find(term => term.name === `asset:${type.asset}`);
-      const durationPerJob = baseMedianHours * Math.exp(assetTerm ? assetTerm.beta : 0);
-      const treeSupportJobs = type.team === "line" ? expectedTypeWork * 0.2 : 0;
-      let treeRemaining = treeSupportJobs;
+      const durationPerJob = jobHours(type);
+      let treeRemaining = type.team === "line" ? expectedTypeWork * 0.2 : 0;
       splitExpectedWork(expectedTypeWork).forEach((unit, index) => {
         const treeWeight = Math.min(unit, treeRemaining);
         const pieces = [];
@@ -509,101 +581,58 @@ function scheduleAllPremises(o) {
         treeRemaining = Math.max(0, treeRemaining - treeWeight);
         pieces.forEach(piece => {
           const id = `${premise.premise.id}|${type.name}|${index}|${taskSequence++}`;
-          const weight = piece.weight;
-          assessmentTasks.push({
-            id,
-            premise: premise.premise.id,
-            duration: 0.5 * weight,
-            readyAt: premise.inspectionComplete,
-            priority: premise.score,
-          });
-          if (piece.needsTree) {
-            treeTasks.push({id, premise: premise.premise.id, duration: 0.5 * weight, priority: premise.score});
-          }
-          repairTasks.push({
-            id,
-            premise: premise.premise.id,
-            team: type.team,
-            duration: durationPerJob * weight,
-            priority: premise.score,
-            needsTree: piece.needsTree,
-          });
+          assessmentTasks.push({id, premise: premise.premise.id, rank: premise.rank, duration: 0.5 * piece.weight, readyAt: premise.inspectionComplete});
+          if (piece.needsTree) treeTasks.push({id, premise: premise.premise.id, rank: premise.rank, duration: 0.5 * piece.weight});
+          repairTasks.push({id, premise: premise.premise.id, rank: premise.rank, team: type.team, duration: (durationPerJob + DELAYS.travelPerJob) * piece.weight, needsTree: piece.needsTree, materials: (DELAYS.materials[type.name] || 0) * Math.min(1, piece.weight)});   // fractional expected work gets a proportional delay
         });
       });
     });
-    premise.teams.detailedAssessment = Math.min(
-      Math.ceil(premise.damageProbability),
-      RESPONSE_WORKFORCE.teams.assessment - 1,
-    );
     const expectedLineJobs = premise.categoryJobs.Wire + premise.categoryJobs.Pole;
-    premise.teams.tree = expectedLineJobs > 0
-      ? Math.min(Math.ceil(expectedLineJobs * 0.2), RESPONSE_WORKFORCE.teams.tree)
-      : 0;
+    premise.teams.detailedAssessment = Math.min(Math.ceil(premise.expectedJobs), RESPONSE_WORKFORCE.teams.assessment - 1);
+    premise.teams.tree = expectedLineJobs > 0 ? Math.min(Math.ceil(expectedLineJobs * 0.2), RESPONSE_WORKFORCE.teams.tree) : 0;
     ["line", "equipment", "protection"].forEach(team => {
-      const expectedByTeam = team === "line"
-        ? expectedLineJobs
-        : premise.categoryJobs[team === "protection" ? "Switch" : "Equipment"];
-      premise.teams[team] = expectedByTeam > 0
-        ? Math.min(Math.ceil(expectedByTeam), RESPONSE_WORKFORCE.teams[team])
-        : 0;
+      const expectedByTeam = team === "line" ? expectedLineJobs : premise.categoryJobs[team === "protection" ? "Switch" : "Equipment"];
+      premise.teams[team] = expectedByTeam > 0 ? Math.min(Math.ceil(expectedByTeam), RESPONSE_WORKFORCE.teams[team]) : 0;
     });
   });
-  const assessedAt = scheduleTeamTasks(
-    assessmentTasks,
-    RESPONSE_WORKFORCE.teams.assessment - 1,
-  ).completions;
+  // 3. Detailed assessments continue on the same assessment pool, then tree/access clearing, then the repair crews.
+  const assessed = scheduleTeamTasks(assessmentTasks, RESPONSE_WORKFORCE.teams.assessment, inspections.availableAt);
+  const assessedAt = assessed.completions;
   treeTasks.forEach(task => { task.readyAt = assessedAt.get(task.id) || 0; });
   const treeClearedAt = scheduleTeamTasks(treeTasks, RESPONSE_WORKFORCE.teams.tree).completions;
+  const byId = new Map(activePremises.map(premise => [premise.premise.id, premise]));
   ["line", "equipment", "protection"].forEach(team => {
     const jobs = repairTasks.filter(task => task.team === team).map(task => ({
       ...task,
-      readyAt: task.needsTree
-        ? treeClearedAt.get(task.id) || assessedAt.get(task.id) || 0
-        : assessedAt.get(task.id) || 0,
+      readyAt: (task.needsTree ? treeClearedAt.get(task.id) || assessedAt.get(task.id) || 0 : assessedAt.get(task.id) || 0) + task.materials,
     }));
     const {completions, starts} = scheduleTeamTasks(jobs, RESPONSE_WORKFORCE.teams[team]);
     jobs.forEach(job => {
-      const premise = activePremises.find(item => item.premise.id === job.premise);
-      const start = starts.get(job.id);
-      premise.repairStart = premise.repairStart === null
-        ? start
-        : Math.min(premise.repairStart, start);
+      const premise = byId.get(job.premise), start = starts.get(job.id);
+      premise.repairStart = premise.repairStart === null ? start : Math.min(premise.repairStart, start);
       premise.completion = Math.max(premise.completion, completions.get(job.id) || 0);
     });
   });
   assessedAt.forEach((finish, id) => {
-    const premiseId = id.split("|")[0];
-    const premise = activePremises.find(item => item.premise.id === premiseId);
+    const premise = byId.get(id.split("|")[0]);
     premise.completion = Math.max(premise.completion, finish);
   });
+  // Convert productive crew hours to wall-clock time (rest periods between shifts).
   activePremises.forEach(premise => {
-    premise.repairDuration = premise.repairStart === null
-      ? 0
-      : premise.completion - premise.repairStart;
+    ['visitStart', 'inspectionComplete', 'completion'].forEach(k => { premise[k] = toWallClock(premise[k]) + lag; });
+    if (premise.repairStart !== null) premise.repairStart = toWallClock(premise.repairStart) + lag;
+  });
+  activePremises.forEach(premise => {
+    premise.repairDuration = premise.repairStart === null ? 0 : premise.completion - premise.repairStart;
     premise.visitDuration = premise.completion - premise.visitStart;
   });
-  const orderedPremises = activePremises.concat(idlePremises);
-  const makespan = Math.max(
-    0,
-    ...activePremises.map(premise => premise.completion),
-  );
   return {
-    premises: orderedPremises,
-    makespan,
-    expectedDamageProbability: activePremises.reduce(
-      (sum, premise) => sum + premise.damageProbability,
-      0,
-    ),
+    premises: activePremises.concat(idlePremises),
+    makespan: Math.max(0, ...activePremises.map(premise => premise.completion)),
+    expectedDamageProbability: activePremises.reduce((sum, premise) => sum + premise.damageProbability, 0),
+    expectedDamageRecords: activePremises.reduce((sum, premise) => sum + premise.expectedJobs, 0),
     idleCount: idlePremises.length,
   };
-}
-
-function formatScheduledDuration(hours) {
-  if (hours <= 0) return "0 min";
-  const minutes = Math.max(5, Math.round(hours * 12) * 5);
-  if (minutes < 60) return `${minutes} min`;
-  const h = Math.floor(minutes / 60), m = minutes % 60;
-  return m ? `${h} h ${m} min` : `${h} h`;
 }
 
 function formatScheduledDuration(hours) {
@@ -847,22 +876,23 @@ function renderRest(p, x, rs, range) {
       : "No restoration schedule could be estimated from the current inputs"}</b></div>
 <h3>Reference: historical and bottom-up estimates, not used in the headline</h3>
 <div class="two"><div><h3 style="margin-top:0">Historical completion ${chip("learned")}</h3>
-<div class="mu">Interval-censored log-normal AFT on ${R.n} closed Feb 2025 repairs (design "${R.selected_design}" chosen by leave-one-day-out CV). The schedule uses the baseline median of this model as the repair duration per job, adjusted by asset type.</div>
+<div class="mu">Interval-censored log-normal AFT on ${R.n} closed Feb 2025 repairs (design "${R.selected_design}" chosen by leave-one-day-out CV). The schedule no longer uses these times: they include waiting in the Feb 2025 queue, which the schedule models explicitly.</div>
 <table><tr><th>Quantile (${$("ag").value})</th><th class="r">Time</th></tr><tr><td>Fast (P10)</td><td class="r">${hrs(H.p10)}</td></tr><tr><td>Typical (median)</td><td class="r">${hrs(H.p50)}</td></tr><tr><td>Slow (P90)</td><td class="r">${hrs(H.p90)}</td></tr></table>
 <div class="mu">Scaled here by the storm-severity factor ${f2(rs.sevMult, 2)} (severity ${f2(rs.S)}x Feb 2025, raised to the fitted power ${f2(R.severity_scaling.beta, 2)}).</div></div>
 <div><h3 style="margin-top:0">Bottom-up labor ${chip("reference")}</h3>
 <div class="mu">Damage scenario card: workbook hours x indirect multiplier / crew.${rs.manual ? "" : ` Quantities are predicted by the model (${f2(rs.N, 2)} damage events given an outage).`}</div>
 ${rs.hasDamage ? `<table><tr><td>Direct repair labor (H_direct)</td><td class="r">${f2(rs.dir, 1)} h</td></tr><tr><td>x multiplier ${f2(rs.mult, 1)} = H_adjusted</td><td class="r">${f2(rs.tot, 1)} labor-h</td></tr><tr><td>/ crew size ${rs.cr}</td><td class="r"><b>${hrs(rs.crewEst)}</b></td></tr></table>` : `<div class="mu">No damage, so 0.</div>`}</div></div>
 <h3>What the data does and does not support</h3><ul>
-<li><b>Asset type matters:</b> ${aft.map(t => `${t.name.replace("asset:", "")} x${f2(t.tr)}`).join(", ")} the time of primary wire. The schedule uses these asset-type effects for repair duration per job.</li>
+<li><b>Asset type matters:</b> ${aft.map(t => `${t.name.replace("asset:", "")} x${f2(t.tr)}`).join(", ")} the historical time of primary wire. The schedule uses workbook labor hours per equipment type instead.</li>
 <li><b>Calibrated to a Feb 2025-scale event only.</b> Sep 2024 repair gaps all fall at 23-26 days, which looks like batch close-out, so that event was excluded.</li>
 <li><b>Heavier tail than shown:</b> ${f2(rs.neverPct, 1)}% of Feb 2025 records were never marked repaired and are excluded from this conditional model.</li>
 <li>Dates have no clock time, so historical precision is about one day.</li></ul>
 <h3>Repair-time-optimized response plan - 1,000-worker scenario</h3>
-<div class="mu">The plan ranks and schedules anonymized premises individually, not circuits. Premises sharing a circuit remain separate stops. Every premise is scheduled; there is no minimum outage risk. A separate cell-level damage model contributes to probability-weighted repair workload. Inspection duration rises with the damage-severity score and includes a small facility allowance; findings may change the ballpark. Facility counts are assigned to the geographically nearest premise and are approximate. Because low-risk premises are included, a premise's estimate also reflects waiting behind the premises scheduled before it.</div>
-<div class="mu">Worker pool assumption: 70 two-person assessment teams (140 people), 105 four-person line teams (420), 70 three-person tree/access teams (210), 35 three-person equipment teams (105), 35 three-person protection teams (105), and 20 shared dispatch/logistics personnel. These proportions scale the illustrative roster from the supplied research; only the two-person assessment team has a cited AEP team-size reference.</div>
-<div class="mu" style="margin-top:6px">Each premise receives its own 0-100 priority score using the established weights: mapped facilities (35), premise damage probability (20), density (15), customer count (10), and historical damage records in its nearest mapped cell (20). Customer count is an exposure input to the cell-level damage probability and remains a separate priority factor; it is never multiplied into repair-job volume. The separate 0-100 severity score uses per-customer modeled damage propensity and local historical damage records, not customer count. The score is a soft guideline: probability-weighted repair effort contributes 90% of the route heuristic and priority score contributes 10%. Repair durations are scenario expectations, not observed damage or confirmed jobs.</div>
-<div class="mu" style="margin-top:6px">The schedule uses the research sample mix (130 wire, 53 switch, 52 pole, 5 equipment across 240 records); switch repair time uses the model's "Other" asset category as a proxy. Repair effort is the damage probability times representative historical median repair durations; it is a ballpark, not a confirmed crew dispatch or job count. Twenty percent of wire/pole work receives 30 minutes of tree/access support. No travel, shift/rest, materials, switching dependencies, or confirmed damage are modeled. This is a workload-balancing heuristic, not a guaranteed global optimum.</div>
+<div class="mu"><b>How the schedule works.</b> (1) Each premise gets an expected number of damage records from the outage model (it keeps growing with storm severity) and a 0-100 priority score. (2) Premises are dispatched in Smith's-rule order: priority points per hour of work, highest first, which minimizes the priority-weighted completion time. (3) Site inspections run in parallel on the ${RESPONSE_WORKFORCE.teams.assessment} assessment teams, followed by detailed assessments on the same pool. (4) Twenty percent of wire and pole work first gets 30 minutes of tree/access clearing, and each repair waits for materials (${Object.entries(DELAYS.materials).map(([k, v]) => `${k.toLowerCase()} ${v} h`).join(', ')}). (5) Repairs go to the line, protection and equipment teams; whenever a team frees up it takes the ready job of the highest-priority premise. A premise's estimate is when its last task finishes, from the start of the response.</div>
+<div class="mu" style="margin-top:6px"><b>Calibrated latency.</b> The explicit schedule is never short of crews, so on its own it finishes far sooner than the historical record. It therefore adds an unmodeled-latency term for storm duration, safe-to-work waiting, dispatch, mobilization and upstream-first switching. That term is calibrated so the job-weighted median completion at the Feb 2025 reference storm equals the trained historical baseline median (${f2(latencyCalibration().target, 1)} h; the schedule alone gives ${f2(latencyCalibration().med, 1)} h), giving ${f2(latencyCalibration().lag0, 1)} h at severity 1. It scales with the same learned severity slope as the historical model (this storm: ${f2(rs.schedule.latencyHours, 1)} h), is 0 when severity is 0, and is recomputed whenever the model is retrained.</div>
+<div class="mu" style="margin-top:6px"><b>Repair mix and job time.</b> The mix of equipment damaged comes from the Feb 2025 ARCOS records (${REPAIR_MIX.map(t => `${t.name} ${Math.round(100 * t.share)}%`).join(", ")}). One job takes the workbook labor hours for that equipment times the indirect multiplier (${f2(num("mu"), 1)}) divided by the people on the team (${REPAIR_MIX.map(t => `${t.name} ${f2(jobHours(t), 1)} h`).join(", ")}). Fuse banks use the recloser hours, and wire spans use a placeholder because the workbook has no conductor data.</div>
+<div class="mu" style="margin-top:6px">Worker pool assumption: 70 two-person assessment teams (140 people), 105 four-person line teams (420), 70 three-person tree/access teams (210), 35 three-person equipment teams (105), 35 three-person protection teams (105), and 20 shared dispatch/logistics personnel. These proportions scale the illustrative roster from the supplied research; only the two-person assessment team has a cited AEP team-size reference.</div>
+<div class="mu" style="margin-top:6px">Each premise receives its own 0-100 priority score using the established weights: mapped facilities (35), premise damage probability (20), density (15), customer count (10), and historical damage records in its nearest mapped cell (20). Inspection time rises with the damage-severity score and includes a small facility allowance. Every premise is scheduled; there is no minimum outage risk, and only a storm severity of 0 gives 0. Repair durations are scenario expectations, not observed damage or confirmed jobs. Travel is a flat ${DELAYS.travelPerInspection} h per inspection and ${DELAYS.travelPerJob} h per repair job, and crews work ${DELAYS.workHoursPerDay} h then rest ${24 - DELAYS.workHoursPerDay} h (times shown are wall-clock). These delay values are editable assumptions, not fitted to data. Switching dependencies and confirmed damage are not modeled. This is a heuristic, not a guaranteed optimum.</div>
 <div class="priority-table-wrap" style="margin-top:8px"><table class="priority-table circuit-schedule"><thead><tr><th class="r">Suggested order</th><th class="r">Premise priority score</th><th>Premise</th><th>Circuit</th><th class="r">Customers</th><th class="r">Displayed outage risk</th><th class="r">Damage severity (0-100)</th><th>Approximate mapped facilities</th><th>Inspection / estimate status</th><th>Probability-weighted repair effort</th><th>Inspection duration</th><th>Inspection window</th><th>Repair work begins</th><th>Repair work window</th><th>Premise restoration estimate (from response start)</th><th>Why / estimate context</th></tr></thead><tbody>${premiseScheduleRows}</tbody></table></div>`;
 }
 
@@ -1033,7 +1063,14 @@ $("leg").innerHTML = `<i style="background:#ff2d55"></i>Feb 2025 damage <i style
 $("b3d").onclick = () => { if (map && mapReady) map.easeTo({pitch: map.getPitch() > 10 ? 0 : 58, bearing: map.getPitch() > 10 ? 0 : -18, duration: 700}); };
 $("bfit").onclick = focusMap;
 $("pm").addEventListener("change", () => { if (!window.__NOMAP) loadNWS(); });
-document.querySelectorAll(".inp,#pm,#lv_d,#lv_v,#lv_c,#basemap").forEach(e => e.addEventListener("input", render));
+// Coalesce rapid slider events into one render per animation frame.
+let renderQueued = false;
+function renderSoon() {
+  if (renderQueued) return;
+  renderQueued = true;
+  (window.requestAnimationFrame || (f => setTimeout(f, 16)))(() => { renderQueued = false; render(); });
+}
+document.querySelectorAll(".inp,#pm,#lv_d,#lv_v,#lv_c,#basemap").forEach(e => e.addEventListener("input", renderSoon));
 $("mu").value = L.indirect_multiplier;
 
 // ---------------------------------------------------------------- Assistant (RAG back end) integration
