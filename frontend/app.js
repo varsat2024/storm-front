@@ -524,7 +524,7 @@ Object.keys(PRESETS).forEach(k => {
   };
   $("presets").appendChild(b);
 });
-const TABS = [["over", "Overview"], ["risk", "Risk drivers"], ["algo", "Algorithm"], ["rest", "Restoration"], ["prep", "Prepare"], ["msg", "Alerts & messages"], ["meth", "Model & validation"]];
+const TABS = [["over", "Overview"], ["risk", "Risk drivers"], ["algo", "Algorithm"], ["rest", "Restoration"], ["prep", "Prepare"], ["msg", "Alerts & messages"], ["meth", "Model & validation"], ["ast", "Assistant"]];
 let tab = "over", mt = 0, lastPm = null;
 function showTab(t) {
   tab = t;
@@ -845,4 +845,88 @@ $("b3d").onclick = () => { if (map && mapReady) map.easeTo({pitch: map.getPitch(
 $("bfit").onclick = focusMap;
 document.querySelectorAll(".inp,#pm,#lv_d,#lv_v,#lv_c").forEach(e => e.addEventListener("input", render));
 $("mu").value = L.indirect_multiplier;
+
+// ---------------------------------------------------------------- Assistant · FastAPI /chat + /status
+const CHAT_API_DEFAULT = "http://127.0.0.1:8000";
+const chatHistory = [];
+const chatApiBase = () => ($("chat_api").value || CHAT_API_DEFAULT).replace(/\/$/, "");
+
+function chatCustomerFromUi() {
+  const address = $("chat_addr").value.trim();
+  if (!address) throw new Error("Enter your address in the Assistant tab.");
+  const o = readStorm();
+  return {
+    address,
+    use_nws: true,
+    scan_feeder_weather: true,
+    storm: {gust: o.gust, rain: o.rain, snow: o.snow, ante: o.ante, leaf: !!o.leaf},
+    scenario: {
+      n_pole: num("n_pole"), n_arm: num("n_arm"), n_xf: num("n_xf"), n_ins: num("n_ins"),
+      n_wire: num("n_wire"), n_rec: num("n_rec"), asset_group: $("ag").value,
+      damage_location: $("fl").value, cr: num("cr"), mu: num("mu"), access_blocked: $("ac").checked,
+    },
+  };
+}
+
+function chatAdd(who, text) {
+  const d = document.createElement("div");
+  d.className = "chat-bubble " + (who === "you" ? "you" : "bot");
+  d.textContent = text;
+  $("chat").appendChild(d);
+  $("chat").scrollTop = $("chat").scrollHeight;
+}
+
+async function fetchLocationStatus(customer) {
+  const r = await fetch(chatApiBase() + "/status", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({address: customer.address, use_nws: customer.use_nws, scan_feeder_weather: customer.scan_feeder_weather,
+      storm: customer.storm, scenario: customer.scenario}),
+  });
+  const data = await r.json();
+  if (!r.ok) throw new Error(typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail) || r.statusText);
+  console.log("[location status] pulled for address:", customer.address, data);
+  if (data.geocode) console.log("[geocode]", data.geocode);
+  return data;
+}
+
+async function askAssistant(msg) {
+  $("chat_status").textContent = "Loading location and asking the assistant…";
+  $("q_send").disabled = true;
+  chatAdd("you", msg);
+  chatHistory.push({role: "user", content: msg});
+  try {
+    const customer = chatCustomerFromUi();
+    await fetchLocationStatus(customer);
+    const r = await fetch(chatApiBase() + "/chat", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({messages: chatHistory, customer}),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail) || r.statusText);
+    if (data.visualizer_status) console.log("[location status] attached to chat reply:", data.visualizer_status);
+    const reply = data.reply || "(no reply text)";
+    chatHistory.push({role: "assistant", content: reply});
+    chatAdd("bot", reply);
+    $("chat_status").textContent = data.visualizer_status
+      ? `Matched ${data.visualizer_status.customer_id || data.visualizer_status.premise_id} · risk ${data.visualizer_status.outage_risk?.band}`
+      : "";
+  } catch (e) {
+    chatHistory.pop();
+    chatAdd("bot", "Could not reach the assistant: " + e.message);
+    $("chat_status").textContent = "";
+    console.error("[assistant]", e);
+  } finally {
+    $("q_send").disabled = false;
+  }
+}
+
+$("q_send").onclick = () => { const v = $("q").value.trim(); if (v) { $("q").value = ""; askAssistant(v); } };
+$("q").addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $("q_send").click(); } });
+{
+  const q = new URLSearchParams(location.search);
+  if (q.get("api")) $("chat_api").value = q.get("api");
+}
+
 showTab("over"); render(); if (!window.__NOMAP) { initMap(); loadNWS(); }

@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Outage Concierge Chat</title>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap">
+  <style>
+    :root { --bg:#f4f5f7; --card:#fff; --line:#e0e3e7; --accent:#c41230; --text:#1a1a1a; }
+    * { box-sizing: border-box; }
+    body { font-family: Inter, system-ui, sans-serif; margin: 0; background: var(--bg); color: var(--text); }
+    header { background: #111; color: #fff; padding: 14px 20px; }
+    header a { color: #ffb4b4; margin-left: 12px; font-size: 14px; }
+    .wrap { max-width: 920px; margin: 0 auto; padding: 16px; display: grid; gap: 14px; }
+    .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+    label { display: block; font-size: 12px; font-weight: 600; margin-bottom: 4px; color: #555; }
+    input, textarea, select { width: 100%; font: inherit; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; }
+    textarea { min-height: 72px; resize: vertical; }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    @media (max-width: 640px) { .row { grid-template-columns: 1fr; } }
+    .chk { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 14px; }
+    .chk input { width: auto; }
+    button { background: var(--accent); color: #fff; border: 0; border-radius: 8px; padding: 10px 18px; font-weight: 600; cursor: pointer; }
+    button:disabled { opacity: 0.5; cursor: wait; }
+    #log { display: flex; flex-direction: column; gap: 10px; max-height: 420px; overflow-y: auto; }
+    .msg { padding: 10px 12px; border-radius: 8px; font-size: 15px; line-height: 1.45; white-space: pre-wrap; }
+    .msg.user { background: #eef2ff; align-self: flex-end; max-width: 85%; }
+    .msg.bot { background: #f0f0f0; align-self: flex-start; max-width: 92%; }
+    .meta { font-size: 12px; color: #666; margin-top: 6px; }
+    .err { color: #b0001a; font-size: 14px; }
+  </style>
+</head>
+<body>
+  <header>
+    <strong>AI Outage Concierge</strong> — chat demo
+    <a href="index.html">Open visualizer</a>
+  </header>
+  <div class="wrap">
+    <div class="card">
+      <div class="row">
+        <div>
+          <label for="api">API base URL</label>
+          <input id="api" value="http://127.0.0.1:8000" placeholder="http://127.0.0.1:8000">
+        </div>
+        <div>
+          <label for="cid">Customer id (optional)</label>
+          <input id="cid" placeholder="P-0001">
+        </div>
+      </div>
+      <div style="margin-top:10px">
+        <label for="addr">Or US address (optional — do not fill both id and address)</label>
+        <input id="addr" placeholder="123 Main St, Roanoke, VA">
+      </div>
+      <label class="chk"><input type="checkbox" id="nws" checked> Load weather from NWS + scan feeder for upstream storm</label>
+      <p class="meta">Location is sent every message so the bot gets a fresh model snapshot. Matches <code>POST /chat</code> <code>customer</code> block.</p>
+    </div>
+    <div class="card" id="log"></div>
+    <div class="card">
+      <label for="q">Your message</label>
+      <textarea id="q" placeholder="Will I lose power tonight? Could a storm north of me affect my house?"></textarea>
+      <div style="margin-top:10px;display:flex;gap:10px;align-items:center">
+        <button type="button" id="send">Send</button>
+        <button type="button" id="clear" style="background:#555">Clear chat</button>
+        <span class="meta" id="status"></span>
+      </div>
+      <p id="err" class="err" hidden></p>
+    </div>
+  </div>
+  <script>
+    const $ = id => document.getElementById(id);
+    const history = [];
+    const apiBase = () => $("api").value.replace(/\/$/, "");
+
+    function customerPayload() {
+      const cid = $("cid").value.trim();
+      const addr = $("addr").value.trim();
+      if (cid && addr) throw new Error("Use customer id or address, not both.");
+      if (!cid && !addr) return null;
+      const c = { use_nws: $("nws").checked, scan_feeder_weather: $("nws").checked };
+      if (cid) c.customer_id = cid;
+      else c.address = addr;
+      return c;
+    }
+
+    function append(role, text, meta) {
+      const d = document.createElement("div");
+      d.className = "msg " + role;
+      d.textContent = text;
+      if (meta) {
+        const m = document.createElement("div");
+        m.className = "meta";
+        m.textContent = meta;
+        d.appendChild(m);
+      }
+      $("log").appendChild(d);
+      $("log").scrollTop = $("log").scrollHeight;
+    }
+
+    async function send() {
+      const text = $("q").value.trim();
+      if (!text) return;
+      $("err").hidden = true;
+      $("send").disabled = true;
+      $("status").textContent = "Thinking…";
+      history.push({ role: "user", content: text });
+      append("user", text);
+      $("q").value = "";
+      try {
+        let customer;
+        try { customer = customerPayload(); } catch (e) {
+          throw new Error(e.message + " Add a customer id or address in the panel above.");
+        }
+        const body = { messages: history.map(m => ({ role: m.role, content: m.content })) };
+        if (customer) body.customer = customer;
+        const r = await fetch(apiBase() + "/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.detail || r.statusText);
+        history.push({ role: "assistant", content: data.reply });
+        let meta = "";
+        const vs = data.visualizer_status;
+        if (vs) {
+          meta = `Risk: ${vs.outage_risk?.band} (${vs.outage_risk?.probability_display}) · ${vs.customer_id || vs.premise_id}`;
+          if (vs.electricity) meta += ` · Power: ${vs.electricity.model_inference}`;
+        }
+        append("bot", data.reply, meta);
+      } catch (e) {
+        $("err").textContent = String(e.message || e);
+        $("err").hidden = false;
+        history.pop();
+      } finally {
+        $("send").disabled = false;
+        $("status").textContent = "";
+      }
+    }
+
+    $("send").onclick = send;
+    $("clear").onclick = () => { history.length = 0; $("log").innerHTML = ""; };
+    $("q").addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } });
+    const q = new URLSearchParams(location.search);
+    if (q.get("api")) $("api").value = q.get("api");
+    if (q.get("customer")) $("cid").value = q.get("customer");
+  </script>
+</body>
+</html>
