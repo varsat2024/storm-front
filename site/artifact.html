@@ -84,10 +84,10 @@ main,aside,.card,.two>div{min-width:0}.card{overflow-x:auto}
 <label for="ante"><span>Rain, previous 3 days</span><b id="ante_v"></b></label><input class="inp" type="range" id="ante" min="0" max="8" step="0.1" value="2.5">
 <div class="chk"><input class="inp" type="checkbox" id="leaf"><label for="leaf">Trees in leaf (Mayâ€“Oct)</label></div>
 <div class="mu" id="sevline"></div><div class="mu" id="nws" style="margin-top:6px"></div></div>
-<div class="card"><h2>Damage scenario</h2><div class="mu" style="margin-bottom:4px">What-if repair job: enter the equipment you expect to be damaged and it sets the crew-time part of the restoration estimate.</div>
-<div class="row"><div><label for="n_pole"><span>Poles</span></label><input class="inp" type="number" id="n_pole" min="0" value="1"></div><div><label for="n_arm"><span>Crossarms</span></label><input class="inp" type="number" id="n_arm" min="0" value="1"></div>
-<div><label for="n_xf"><span>Transformers</span></label><input class="inp" type="number" id="n_xf" min="0" value="0"></div><div><label for="n_ins"><span>Insulator sets</span></label><input class="inp" type="number" id="n_ins" min="0" value="3"></div>
-<div><label for="n_wire"><span>Wire spans*</span></label><input class="inp" type="number" id="n_wire" min="0" value="2"></div><div><label for="n_rec"><span>Reclosers</span></label><input class="inp" type="number" id="n_rec" min="0" value="0"></div></div>
+<div class="card"><h2>Damage scenario</h2><div class="mu" style="margin-bottom:4px">Enter the damage expected at this premise. Damage counts start at zero, and each premise keeps its own scenario when you switch locations.</div>
+<div class="row"><div><label for="n_pole"><span>Poles</span></label><input class="inp" type="number" id="n_pole" min="0" value="0"></div><div><label for="n_arm"><span>Crossarms</span></label><input class="inp" type="number" id="n_arm" min="0" value="0"></div>
+<div><label for="n_xf"><span>Transformers</span></label><input class="inp" type="number" id="n_xf" min="0" value="0"></div><div><label for="n_ins"><span>Insulator sets</span></label><input class="inp" type="number" id="n_ins" min="0" value="0"></div>
+<div><label for="n_wire"><span>Wire spans*</span></label><input class="inp" type="number" id="n_wire" min="0" value="0"></div><div><label for="n_rec"><span>Reclosers</span></label><input class="inp" type="number" id="n_rec" min="0" value="0"></div></div>
 <label for="ag"><span>Main damage type</span></label><select class="inp" id="ag"></select>
 <label for="fl"><span>Where is the damage?</span></label><select class="inp" id="fl"><option value="branch">On my branch or service</option><option value="other">Beyond my nearest fuse/recloser</option></select>
 <div class="row"><div><label for="cr"><span>Crew size</span></label><input class="inp" type="number" id="cr" min="1" max="8" value="3"></div><div><label for="mu"><span>Indirect multiplier</span></label><input class="inp" type="number" id="mu" min="1" step="0.1" value="4.5"></div></div>
@@ -126,6 +126,7 @@ const $ = id => document.getElementById(id);
 const num = id => Math.max(0, parseFloat($(id).value) || 0);
 const COL = {Low: "#2e7d32", Moderate: "#c26a00", High: "#d9451f", Imminent: "#b0001a"};
 const Z80 = 1.2816, TYPICAL_ZONE = 51;
+const DAMAGE_SCENARIO_PRIORITY_REFERENCE_HOURS = 24;
 const RESPONSE_WORKFORCE = {
   totalPeople: 1000,
   teams: {assessment: 70, line: 105, tree: 70, equipment: 35, protection: 35},
@@ -237,28 +238,36 @@ const sevName = S => S < .05 ? "Calm" : S < .25 ? "Minor" : S < .6 ? "Moderate" 
 const readStorm = () => ({gust: num("gust"), rain: num("rain"), snow: num("snow"), ante: num("ante"), leaf: $("leaf").checked ? 1 : 0});
 
 function hrs(h) { if (h <= 0) return "0 h"; return h < 36 ? Math.max(1, Math.round(h)) + " h" : (Math.round(h / 12) / 2) + " days"; }
-function restoration() {
+function restoration(scenario = activeScenario(), premise = D.prem[$("pm").value], o = readStorm()) {
   let dir = 0;
-  Object.keys(L.items).forEach(k => dir += num("n_" + k) * L.items[k].hours);
-  const mult = num("mu"), tot = dir * mult, cr = Math.max(1, num("cr")), blocked = $("ac").checked;
-  const gi = R.groups.indexOf($("ag").value);
+  Object.keys(L.items).forEach(k => {
+    dir += Math.max(0, parseFloat(scenario[`n_${k}`]) || 0) * L.items[k].hours;
+  });
+  const mult = Math.max(0, parseFloat(scenario.mu) || 0);
+  const tot = dir * mult;
+  const cr = Math.max(1, parseFloat(scenario.cr) || 1);
+  const blocked = scenario.ac;
+  const gi = R.groups.indexOf(scenario.ag);
   const mu = R.terms[0].beta + (gi >= 0 ? R.terms[1 + gi].beta : 0);
   // Weather effect: current storm severity S scales expected workload, and the AFT workload slope turns that into a time multiplier S^beta
-  const SS = R.severity_scaling, S = sevCalc(readStorm()).S;
+  const SS = R.severity_scaling, S = sevCalc(o).S;
   const sevMult = S > 0 ? Math.pow(S, SS.beta) : 0, extrap = S > SS.s_max || (S > 0 && S < SS.s_min);
   const q = z => Math.exp(mu + R.sigma * z) * 24 * sevMult;
   let bLo = tot / (cr + 1) * sevMult, bHi = tot / Math.max(1, cr - 1) * sevMult;
   if (blocked && tot > 0 && sevMult > 0) { bLo += 2; bHi += 8; }
   const hist = {p10: q(-Z80), p50: q(0), p90: q(Z80)};
-  const early = $("fl").value === "other" && D.prem[$("pm").value].nd > 0;
-  let lo, hi;
-  if (early) { lo = hist.p10; hi = hist.p50; }
-  else { lo = Math.max(hist.p10, bLo); hi = Math.max(hist.p90, bHi); }
-  const estimate = early
-    ? Math.sqrt(lo * hi)
-    : Math.max(hist.p50, (bLo + bHi) / 2);
+  const early = scenario.fl === "other" && premise.nd > 0;
+  const assetMultiplier = gi >= 0 ? Math.exp(R.terms[1 + gi].beta) : 1;
+  const locationMultiplier = early && hist.p50 > 0 ? hist.p10 / hist.p50 : 1;
+  const scenarioLo = bLo * assetMultiplier * locationMultiplier;
+  const scenarioHi = bHi * assetMultiplier * locationMultiplier;
+  const lo = tot > 0 ? scenarioLo : 0;
+  const hi = tot > 0 ? scenarioHi : 0;
+  const estimate = tot > 0
+    ? early ? Math.sqrt(scenarioLo * scenarioHi) : (scenarioLo + scenarioHi) / 2
+    : 0;
   const neverPct = 100 * R.n_never_closed_excluded / (R.n + R.n_never_closed_excluded);
-  return {S, sevMult, extrap, dir, mult, tot, cr, blocked, bLo, bHi, hist, early, lo, hi, estimate, hasDamage: tot > 0, neverPct};
+  return {S, sevMult, extrap, dir, mult, tot, cr, blocked, bLo, bHi, hist, early, lo, hi, estimate, assetMultiplier, locationMultiplier, hasDamage: tot > 0, neverPct};
 }
 
 function scheduleTeamTasks(tasks, teamCount) {
@@ -340,10 +349,12 @@ function scorePriorityPremises(o) {
   const premiseFacts = D.prem.map(premise => {
     const damageEstimate = premiseDamageEstimate(premise, o);
     const outageRisk = risk(premise, o).P;
+    const scenario = premiseDamageScenarios.get(premise.id) || damageScenarioDefaults;
+    const damageScenarioHours = restoration(scenario, premise, o).estimate;
     const counts = facilitiesByPremise.get(premise.id);
     const weightedFacilities = counts.hospitals * 3 + counts.police * 2 + counts.fire;
     const cellDamageHistory = PREMISE_CELL_DAMAGE.get(premise.id) || 0;
-    return {premise, damageEstimate, outageRisk, counts, weightedFacilities, cellDamageHistory};
+    return {premise, damageEstimate, outageRisk, damageScenarioHours, counts, weightedFacilities, cellDamageHistory};
   });
   const maxOf = selector => Math.max(1, ...premiseFacts.map(selector));
   const densityMax = maxOf(item => Math.max(0, item.premise.f[0]));
@@ -367,11 +378,15 @@ function scorePriorityPremises(o) {
     const customerFactor = clamp(Math.sqrt(premise.cn / Math.max(customerReference, 1)), 0.5, 2);
     const facilityCount = counts.hospitals + counts.police + counts.fire;
     const points = {
-      facilities: 35 * item.weightedFacilities / facilityWeightMax,
-      risk: 20 * riskProbability,
-      density: 15 * Math.max(0, premise.f[0]) / densityMax,
-      customers: 10 * Math.log1p(premise.cn) / customerMax,
-      history: 20 * Math.sqrt(item.cellDamageHistory) / reportMax,
+      facilities: 28 * item.weightedFacilities / facilityWeightMax,
+      risk: 16 * riskProbability,
+      density: 12 * Math.max(0, premise.f[0]) / densityMax,
+      customers: 8 * Math.log1p(premise.cn) / customerMax,
+      history: 16 * Math.sqrt(item.cellDamageHistory) / reportMax,
+      damageScenario: 20 * Math.min(
+        1,
+        item.damageScenarioHours / DAMAGE_SCENARIO_PRIORITY_REFERENCE_HOURS,
+      ),
     };
     const propensityScore = damageEstimate.rate / damageRateMax;
     const historyScore = Math.sqrt(item.cellDamageHistory) / reportMax;
@@ -385,6 +400,7 @@ function scorePriorityPremises(o) {
       customers: premise.cn,
       cellDamageHistory: item.cellDamageHistory,
       damageSeverityScore,
+      damageScenarioHours: item.damageScenarioHours,
       riskProbability,
       facilityCount,
       facilityAllowanceMinutes: facilityCount * 2,
@@ -396,7 +412,7 @@ function scorePriorityPremises(o) {
   }).sort((a, b) => b.score - a.score || a.premise.id.localeCompare(b.premise.id));
 }
 
-function scheduleAllPremises(o) {
+function scheduleAllPremises(o, selectedPremiseId, selectedRepairEstimate) {
   const mix = [
     {name: "Wire", share: 130 / 240, asset: null, team: "line"},
     {name: "Switch", share: 53 / 240, asset: "Other", team: "protection"},
@@ -543,6 +559,18 @@ function scheduleAllPremises(o) {
       : premise.completion - premise.repairStart;
     premise.visitDuration = premise.completion - premise.visitStart;
   });
+  const selectedPremise = activePremises.find(item => item.premise.id === selectedPremiseId);
+  if (selectedPremise) {
+    const repairStart = selectedRepairEstimate > 0
+      ? selectedPremise.repairStart ?? selectedPremise.inspectionComplete
+      : null;
+    selectedPremise.repairStart = repairStart;
+    selectedPremise.completion = repairStart === null
+      ? selectedPremise.inspectionComplete
+      : repairStart + selectedRepairEstimate;
+    selectedPremise.repairDuration = selectedRepairEstimate;
+    selectedPremise.visitDuration = selectedPremise.completion - selectedPremise.visitStart;
+  }
   const orderedPremises = activePremises.concat(lowRiskPremises);
   const makespan = Math.max(
     0,
@@ -661,9 +689,13 @@ const bar = (P, c) => `<div class="bar"><i style="width:${Math.round(P * 100)}%;
 function render() {
   const o = readStorm(), p = D.prem[$("pm").value], x = risk(p, o), band = bandOf(x.P), col = COL[band];
   const rs = restoration(), conf = confidence(x);
-  const schedule = scheduleAllPremises(o);
+  const schedule = scheduleAllPremises(o, p.id, rs.estimate);
   const selectedPremise = schedule.premises.find(item => item.premise.id === p.id);
   if (!selectedPremise) throw new Error(`No restoration schedule found for premise ${p.id}`);
+  const activePremiseCount = schedule.premises.filter(item => !item.lowRisk).length;
+  const suggestedOrder = selectedPremise.lowRisk
+    ? "No visit suggested (Low risk)"
+    : `Suggested visit #${schedule.premises.indexOf(selectedPremise) + 1} of ${activePremiseCount}`;
   const estimate = selectedPremise.lowRisk
     ? "No restoration expected"
     : formatScheduledDuration(selectedPremise.completion);
@@ -675,6 +707,7 @@ function render() {
   $("kpis").innerHTML =
     `<div class="kpi"><small>Outage risk</small><div class="v" style="color:${col}">${band}</div>${bar(x.P, col)}<div class="n">${pc(x.P)} chance · 80% interval ${pc(x.Plo)}–${pc(x.Phi)} · confidence ${conf}</div></div>
 <div class="kpi"><small>Your premise-specific restoration estimate</small><div class="v">${estimate}</div><div class="n">${p.id} · circuit C-${p.c + 1} · inspections and repair work are scheduled separately</div></div>
+<div class="kpi"><small>Suggested visit</small><div class="v">${selectedPremise.lowRisk ? "No visit" : `#${schedule.premises.indexOf(selectedPremise) + 1}`}</div><div class="n">${selectedPremise.lowRisk ? suggestedOrder : `of ${activePremiseCount} premises · route order also reflects modeled repair workload`}</div></div>
 <div class="kpi"><small>Storm severity</small><div class="v">${sevName(x.sv.S)}</div><div class="n">${f2(x.sv.S)} × the Feb 2025 storm · weather weights ${SV.source}</div></div>
 <div class="kpi"><small>Alerts</small><div class="v">${pre ? "Eligible" : "Not yet"}</div><div class="n">${esc ? "Human escalation triggered" : "Standard automated alerts"}</div></div>`;
   renderRisk(p, o, x, band, col);
@@ -794,9 +827,9 @@ function renderRest(p, x, rs, estimate, schedule) {
 <table><tr><th>Quantile (${$("ag").value})</th><th class="r">Time</th></tr><tr><td>Fast (P10)</td><td class="r">${hrs(H.p10)}</td></tr><tr><td>Typical (median)</td><td class="r">${hrs(H.p50)}</td></tr><tr><td>Slow (P90)</td><td class="r">${hrs(H.p90)}</td></tr></table></div>
 <div><h3 style="margin-top:0">Bottom-up labor ${chip("reference")}</h3>
 <div class="mu">Workbook hours × indirect multiplier ÷ crew.</div>
-${rs.hasDamage ? `<table><tr><td>Direct repair labor</td><td class="r">${f2(rs.dir, 1)} h</td></tr><tr><td>× multiplier ${f2(rs.mult, 1)}</td><td class="r">${f2(rs.tot, 0)} labor-h</td></tr><tr><td>÷ crew of ${rs.cr} (crew size ±1)</td><td class="r">${hrs(rs.bLo)}–${hrs(rs.bHi)}</td></tr>${rs.hasDamage ? `<tr><td>× storm severity ${f2(rs.S)}<sup>${f2(R.severity_scaling.beta, 2)}</sup> = ${f2(rs.sevMult, 2)}</td><td class="r"></td></tr>` : ""}${rs.blocked ? `<tr><td>Blocked access ${chip("assumption")}</td><td class="r">+2–8 h</td></tr>` : ""}</table>` : `<div class="mu">No damage entered, so only the historical range is shown.</div>`}</div></div>
+${rs.hasDamage ? `<table><tr><td>Direct repair labor</td><td class="r">${f2(rs.dir, 1)} h</td></tr><tr><td>× multiplier ${f2(rs.mult, 1)}</td><td class="r">${f2(rs.tot, 0)} labor-h</td></tr><tr><td>÷ crew of ${rs.cr} (crew size ±1)</td><td class="r">${hrs(rs.bLo)}–${hrs(rs.bHi)}</td></tr><tr><td>× storm severity ${f2(rs.S)}<sup>${f2(R.severity_scaling.beta, 2)}</sup></td><td class="r">${f2(rs.sevMult, 2)}×</td></tr><tr><td>× main damage type (${$("ag").value})</td><td class="r">${f2(rs.assetMultiplier, 2)}×</td></tr>${rs.early ? `<tr><td>× early-restoration location adjustment</td><td class="r">${f2(rs.locationMultiplier, 2)}×</td></tr>` : ""}${rs.blocked ? `<tr><td>Blocked access ${chip("assumption")}</td><td class="r">+2–8 h</td></tr>` : ""}</table>` : `<div class="mu">No damage entered, so the estimate falls back to the historical duration model.</div>`}</div></div>
 <h3>How the two are combined ${chip("rule")}</h3>
-<div class="mu">The single planning estimate uses the historical median or the midpoint of the bottom-up crew-time estimate, whichever is longer. For the early-restoration case, it uses the geometric midpoint between historical P10 and P50. The storm-severity factor is ${f2(rs.sevMult, 2)} (severity ${f2(rs.S)}× Feb 2025, raised to the learned power).</div>
+<div class="mu">When the damage scenario contains repair work, its bottom-up crew-time estimate drives the premise restoration duration, adjusted for storm severity and the selected main damage type; the early-restoration location applies its own historical P10-to-median factor. The scenario estimate is no longer held at the historical median, so changing damage counts changes the estimate. If all repair-item quantities are zero (including a blank number field), no repair duration is added; the premise estimate reflects its scheduled inspection and response timing only. Historical durations remain visible as reference data.</div>
 <div class="formula">${rs.early ? "early step: low = historical P10, high = historical median" : "low = max(historical P10, bottom-up low)\nhigh = max(historical P90, bottom-up high)"}</div>
 <h3>What the data does and does not support</h3><ul>
 <li><b>Asset type matters:</b> ${aft.map(t => `${t.name.replace("asset:", "")} ×${f2(t.tr)}`).join(", ")} the time of primary wire.</li>
@@ -812,9 +845,9 @@ ${rs.hasDamage ? `<table><tr><td>Direct repair labor</td><td class="r">${f2(rs.d
     : schedule.makespan > 0
       ? `Estimated premise schedule finish: ${formatScheduledDuration(schedule.makespan)}`
       : "No restoration schedule could be estimated from the current inputs"}</b>
-<div>The plan ranks and schedules anonymized premises individually, not circuits. Premises sharing a circuit remain separate stops. The same displayed outage-risk probability and Low-risk threshold used in the outage-risk card determine whether a restoration estimate is shown: premises below the cutoff have no estimate; all others receive a numeric ballpark. A separate cell-level damage model contributes only to probability-weighted repair workload and does not determine estimate eligibility. Inspection duration rises with the damage-severity score and includes a small facility allowance; findings may change the ballpark. The table includes circuit number only as context. Facility counts are assigned to the geographically nearest premise and are approximate.</div></div>
+<div>The plan ranks and schedules anonymized premises individually, not circuits. Premises sharing a circuit remain separate stops. The same displayed outage-risk probability and Low-risk threshold used in the outage-risk card determine whether a restoration estimate is shown: premises below the cutoff have no estimate; all others receive a numeric ballpark. A separate cell-level damage model contributes only to probability-weighted repair workload and does not determine estimate eligibility. For the selected premise, the Damage scenario inputs determine its repair duration; its estimate also includes its scheduled start and inspection time. Inspection duration rises with the damage-severity score and includes a small facility allowance; findings may change the ballpark. The table includes circuit number only as context. Facility counts are assigned to the geographically nearest premise and are approximate.</div></div>
 <div class="mu">Worker pool assumption: 70 two-person assessment teams (140 people), 105 four-person line teams (420), 70 three-person tree/access teams (210), 35 three-person equipment teams (105), 35 three-person protection teams (105), and 20 shared dispatch/logistics personnel. These proportions scale the illustrative roster from the supplied research; only the two-person assessment team has a cited AEP team-size reference.</div>
-<div class="mu" style="margin-top:6px">Each premise receives its own 0–100 priority score using the established weights: mapped facilities (35), premise damage probability (20), density (15), customer count (10), and historical damage records in its nearest mapped cell (20). Customer count is an exposure input to the cell-level damage probability and remains a separate priority factor; it is never multiplied into repair-job volume. The separate 0–100 severity score uses per-customer modeled damage propensity and local historical damage records, not customer count. The score is a soft guideline: probability-weighted repair effort contributes 90% of the route heuristic and priority score contributes 10%. Repair durations are scenario expectations, not observed damage or confirmed jobs.</div>
+<div class="mu" style="margin-top:6px">Each premise receives a 0–100 priority score. Existing factors contribute up to 80 points: mapped facilities (28), displayed outage risk (16), density (12), customer count (8), and historical damage records in its nearest mapped cell (16). The premise's own Damage scenario contributes up to 20 additional points, scaled by its scenario-based restoration estimate relative to a 24-hour reference; changing a premise's scenario can change its score and route position, shifting scheduled times for other premises. Customer count remains a separate priority factor and is never multiplied into repair-job volume. The separate 0–100 damage-severity score still uses per-customer modeled propensity and local history, not customer count. The score remains a soft guideline: probability-weighted modeled repair effort contributes 90% of the route heuristic and priority score contributes 10%. Restoration estimate calculations are unchanged.</div>
 <div class="mu" style="margin-top:6px">The schedule uses the research sample mix (130 wire, 53 switch, 52 pole, 5 equipment across 240 records); switch repair time uses the model's "Other" asset category as a proxy. Repair effort is the damage probability times representative historical median repair durations; it is a ballpark, not a confirmed crew dispatch or job count. Twenty percent of wire/pole work receives 30 minutes of tree/access support. Facilities are assigned to their geographically nearest premise for this approximate plan. No travel, shift/rest, materials, switching dependencies, or confirmed damage are modeled. This is a workload-balancing heuristic, not a guaranteed global optimum.</div>
 <div class="priority-table-wrap" style="margin-top:8px"><table class="priority-table circuit-schedule"><thead><tr><th class="r">Suggested order</th><th class="r">Premise priority score</th><th>Premise</th><th>Circuit</th><th class="r">Customers</th><th class="r">Displayed outage risk</th><th class="r">Damage severity (0–100)</th><th>Approximate mapped facilities</th><th>Inspection / estimate status</th><th>Probability-weighted repair effort</th><th>Inspection duration</th><th>Inspection window</th><th>Repair work begins</th><th>Repair work window</th><th>Premise restoration estimate (from response start)</th><th>Why / estimate context</th></tr></thead><tbody>${premiseScheduleRows}</tbody></table></div>`;
 }
@@ -962,8 +995,44 @@ function drawFb() {
 $("leg").innerHTML = `<i style="background:#d71920"></i>Feb 2025 damage <i style="background:#111;margin-left:6px"></i>Sep 2024 <i style="background:#8a8f94;margin-left:6px"></i>Other<br><i style="background:#1f6b3a"></i>Recloser <i style="background:#2f5fa8;margin-left:6px"></i>Switch · bold line = your circuit, colored by risk<br><i style="background:#c2185b"></i>Hospital <i style="background:#2864dc;margin-left:6px"></i>Police station <i style="background:#e87513;margin-left:6px"></i>Fire station`;
 $("b3d").onclick = () => { if (map && mapReady) map.easeTo({pitch: map.getPitch() > 10 ? 0 : 58, bearing: map.getPitch() > 10 ? 0 : -18, duration: 700}); };
 $("bfit").onclick = focusMap;
-document.querySelectorAll(".inp,#pm,#lv_d,#lv_v,#lv_c").forEach(e => e.addEventListener("input", render));
 $("mu").value = L.indirect_multiplier;
+const damageScenarioIds = ["n_pole", "n_arm", "n_xf", "n_ins", "n_wire", "n_rec", "ag", "fl", "cr", "mu", "ac"];
+const damageScenarioDefaults = {
+  n_pole: "0", n_arm: "0", n_xf: "0", n_ins: "0", n_wire: "0", n_rec: "0",
+  ag: $("ag").value, fl: $("fl").value, cr: $("cr").value, mu: $("mu").value, ac: $("ac").checked,
+};
+const premiseDamageScenarios = new Map();
+const activeScenario = () => Object.fromEntries(damageScenarioIds.map(id => [
+  id,
+  $(id).type === "checkbox" ? $(id).checked : $(id).value,
+]));
+const applyScenario = scenario => damageScenarioIds.forEach(id => {
+  if ($(id).type === "checkbox") $(id).checked = scenario[id];
+  else $(id).value = scenario[id];
+});
+let activeScenarioPremiseId = D.prem[$("pm").value].id;
+premiseDamageScenarios.set(activeScenarioPremiseId, activeScenario());
+const persistActiveScenario = () =>
+  premiseDamageScenarios.set(activeScenarioPremiseId, activeScenario());
+const restorePremiseScenario = () => {
+  const nextPremiseId = D.prem[$("pm").value].id;
+  if (nextPremiseId === activeScenarioPremiseId) return;
+  persistActiveScenario();
+  activeScenarioPremiseId = nextPremiseId;
+  applyScenario(premiseDamageScenarios.get(nextPremiseId) || damageScenarioDefaults);
+  render();
+};
+damageScenarioIds.forEach(id => {
+  const input = $(id);
+  input.addEventListener(input.tagName === "SELECT" ? "change" : "input", () => {
+    persistActiveScenario();
+    render();
+  });
+});
+document.querySelectorAll(".inp,#lv_d,#lv_v,#lv_c").forEach(e => {
+  if (!damageScenarioIds.includes(e.id)) e.addEventListener("input", render);
+});
+$("pm").addEventListener("change", restorePremiseScenario);
 showTab("over"); render(); if (!window.__NOMAP) { initMap(); loadNWS(); }
 
 </script>
