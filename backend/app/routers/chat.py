@@ -5,6 +5,7 @@ from botocore.exceptions import ClientError
 
 from app.bedrock_client import get_client
 from app.config import MODEL_ID, MAX_TOKENS
+from app.customer_context import CustomerContext, build_customer_context_block
 from app.system_prompt import SYSTEM_PROMPT
 
 router = APIRouter(prefix="/chat", tags=["chat"])
@@ -21,6 +22,8 @@ class ChatRequest(BaseModel):
     Full conversation history. Each item has 'role' (user|assistant) and 'content'.
     The frontend maintains and sends the full history each turn.
     """
+    customer: CustomerContext | None = None
+    """Optional location + storm/scenario inputs — same fields as the visualizer sidebar."""
 
 
 class ChatResponse(BaseModel):
@@ -30,7 +33,11 @@ class ChatResponse(BaseModel):
     output_tokens: int
 
 
-def _call_bedrock(messages: list[dict]) -> ChatResponse:
+class ChatResponseWithStatus(ChatResponse):
+    visualizer_status: dict | None = None
+
+
+def _call_bedrock(messages: list[dict], system_extra: str = "") -> ChatResponse:
     """Shared logic for calling Bedrock Converse API."""
     client = get_client()
 
@@ -38,11 +45,14 @@ def _call_bedrock(messages: list[dict]) -> ChatResponse:
         {"role": msg["role"], "content": [{"text": msg["content"]}]}
         for msg in messages
     ]
+    system_text = SYSTEM_PROMPT
+    if system_extra:
+        system_text = system_text + "\n\n---\n" + system_extra
 
     try:
         response = client.converse(
             modelId=MODEL_ID,
-            system=[{"text": SYSTEM_PROMPT}],
+            system=[{"text": system_text}],
             messages=bedrock_messages,
             inferenceConfig={
                 "maxTokens": MAX_TOKENS,
@@ -74,7 +84,7 @@ def _call_bedrock(messages: list[dict]) -> ChatResponse:
     )
 
 
-@router.post("", response_model=ChatResponse)
+@router.post("", response_model=ChatResponseWithStatus)
 async def chat(request: ChatRequest):
     """
     Multi-turn chat via POST body.
@@ -84,7 +94,14 @@ async def chat(request: ChatRequest):
         raise HTTPException(status_code=400, detail="messages list cannot be empty.")
 
     messages = [{"role": m.role, "content": m.content} for m in request.messages]
-    return _call_bedrock(messages)
+    status_block, status_json = "", None
+    if request.customer:
+        try:
+            status_block, status_json = await build_customer_context_block(request.customer)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+    reply = _call_bedrock(messages, system_extra=status_block)
+    return ChatResponseWithStatus(**reply.model_dump(), visualizer_status=status_json)
 
 
 @router.get("/query", response_model=ChatResponse)
