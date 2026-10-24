@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>AI Outage Concierge</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
+<style>/*__STYLES__*/</style>
+<script src="https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+</head><body>
+<header><div class="hd"><div class="mark">AEP</div><div><h1>AI Outage Concierge</h1><p>Predict · Explain · Prepare · Communicate</p></div><span class="pill" id="hdpill">Prototype · anonymized data</span></div></header>
+<div class="wrap">
+<aside>
+<div class="card"><h2>Your location</h2><label for="pm"><span>Anonymized premise</span></label><select id="pm"></select></div>
+<div class="card"><h2>Storm conditions</h2>
+<div class="chips" id="presets"></div>
+<label for="gust"><span>Peak wind gust</span><b id="gust_v"></b></label><input class="inp" type="range" id="gust" min="15" max="90" value="55">
+<label for="rain"><span>Rain, past 24 h</span><b id="rain_v"></b></label><input class="inp" type="range" id="rain" min="0" max="6" step="0.1" value="2">
+<label for="snow"><span>Snowfall, past 24 h</span><b id="snow_v"></b></label><input class="inp" type="range" id="snow" min="0" max="18" step="0.5" value="0">
+<label for="ante"><span>Rain, previous 3 days</span><b id="ante_v"></b></label><input class="inp" type="range" id="ante" min="0" max="8" step="0.1" value="2.5">
+<div class="chk"><input class="inp" type="checkbox" id="leaf"><label for="leaf">Trees in leaf (May–Oct)</label></div>
+<div class="mu" id="sevline"></div></div>
+<div class="card"><h2>Damage scenario</h2>
+<div class="row"><div><label for="n_pole"><span>Poles</span></label><input class="inp" type="number" id="n_pole" min="0" value="1"></div><div><label for="n_arm"><span>Crossarms</span></label><input class="inp" type="number" id="n_arm" min="0" value="1"></div>
+<div><label for="n_xf"><span>Transformers</span></label><input class="inp" type="number" id="n_xf" min="0" value="0"></div><div><label for="n_ins"><span>Insulator sets</span></label><input class="inp" type="number" id="n_ins" min="0" value="3"></div>
+<div><label for="n_wire"><span>Wire spans*</span></label><input class="inp" type="number" id="n_wire" min="0" value="2"></div><div><label for="n_rec"><span>Reclosers</span></label><input class="inp" type="number" id="n_rec" min="0" value="0"></div></div>
+<label for="ag"><span>Main damage type</span></label><select class="inp" id="ag"></select>
+<label for="fl"><span>Where is the damage?</span></label><select class="inp" id="fl"><option value="branch">On my branch or service</option><option value="other">Beyond my nearest fuse/recloser</option></select>
+<div class="row"><div><label for="cr"><span>Crew size</span></label><input class="inp" type="number" id="cr" min="1" max="8" value="3"></div><div><label for="mu"><span>Indirect multiplier</span></label><input class="inp" type="number" id="mu" min="1" step="0.1" value="4.5"></div></div>
+<div class="chk"><input class="inp" type="checkbox" id="ac"><label for="ac">Road or access blocked</label></div>
+<div class="mu">*Placeholder hours: the labor workbook has no conductor-repair data.</div></div>
+</aside>
+<main>
+<div class="tabs" role="tablist" id="tabs"></div>
+<section id="t_over">
+<div class="kpis" id="kpis"></div>
+<div class="card"><h2>Circuit map · 3D</h2><div class="mapbar"><button class="btn" id="b3d">Tilt 2D/3D</button><button class="btn" id="bfit">Re-center</button>
+<label><input type="checkbox" id="lv_d" checked>Damage records</label><label><input type="checkbox" id="lv_v" checked>Reclosers &amp; switches</label><label><input type="checkbox" id="lv_c" checked>Load &amp; damage bins</label><span class="mu">Drag to pan, right-drag to rotate, scroll to zoom.</span></div>
+<div id="mapbox"><div id="map"></div><div class="leg" id="leg"></div><div id="cellinfo"></div></div>
+<div class="mu" style="margin-top:6px">Bin height = customers served, color = damage records. Circuit lines are colored by modeled risk for a typical protection zone under your storm. Your premise appears only as an approximate ≈400 m cell. No basemap is loaded.</div></div>
+<div class="card" style="margin-top:14px"><h2>Top reasons</h2><div id="reasons"></div></div></section>
+<section id="t_risk" hidden><div class="card"><h2>How your risk builds up</h2><div class="mu" style="margin-bottom:6px">Each row applies one more factor and shows the multiplier and resulting chance of an outage.</div><div id="build"></div></div>
+<div class="card" style="margin-top:14px"><h2>What your location contributes</h2><div class="mu">Rate ratio for each feature of your 400 m cell, from the trained model (1.00 = typical cell).</div><div id="featbars"></div></div>
+<div class="card" style="margin-top:14px"><h2>What would move your risk</h2><div class="mu">Change in outage chance (percentage points) if one condition changed.</div><div id="sens"></div></div>
+<div class="card" style="margin-top:14px"><h2>Factors explained</h2><div id="expl"></div></div></section>
+<section id="t_algo" hidden><div class="card" id="algo"></div></section>
+<section id="t_rest" hidden><div class="card" id="rest"></div></section>
+<section id="t_prep" hidden><div class="card" id="prep"></div></section>
+<section id="t_msg" hidden><div class="card"><h2>Alert eligibility</h2><div id="alert"></div></div><div class="card" style="margin-top:14px"><h2>Proactive messages</h2><div class="chips" id="mtabs"></div><div class="msg" id="msg"></div></div></section>
+<section id="t_meth" hidden><div class="card" id="why"></div></section>
+</main></div>
+<footer>Demo for the Hack/OHIO 2026 AEP challenge. Estimates are model output, not confirmed utility information. In an emergency call 911.</footer>
+<script>
+const MODEL=/*__MODEL__*/null;
+const DATA=/*__DATA__*/null;
+/*__APP__*/
+</script></body></html>
