@@ -69,7 +69,7 @@ function unitOf(h) { return h < 36 ? [Math.max(1, Math.round(h)), "h"] : [Math.r
 function rangeTxt(a, b) {
   if (b <= 0) return "0 hours";
   const A = unitOf(a), B = unitOf(b);
-  return A[1] === B[1] ? `${A[0]}-${B[0]} ${A[1] === "h" ? "hours" : "days"}` : `${A[0]} hours-${B[0]} days`;
+  return A[1] === B[1] ? `${A[0]}–${B[0]} ${A[1] === "h" ? "hours" : "days"}` : `${A[0]} hours–${B[0]} days`;
 }
 function restoration() {
   let dir = 0;
@@ -92,6 +92,63 @@ function restoration() {
   return {S, sevMult, extrap, dir, mult, tot, cr, blocked, bLo, bHi, hist, early, lo, hi, hasDamage: tot > 0, neverPct};
 }
 
+
+// ---------------------------------------------------------------- NWS (api.weather.gov) live conditions
+// Only the ~400 m cell centre of the selected premise, rounded to 2 decimals (~1 km), is sent to the NWS.
+const NWS = "https://api.weather.gov";
+const MM_IN = 1 / 25.4, KMH_MPH = 0.621371;
+function isoDurH(d) { const m = /P(?:(\d+)D)?(?:T(?:(\d+)H)?)?/.exec(d) || []; return (+m[1] || 0) * 24 + (+m[2] || 0) || 1; }
+function gridSeries(prop) {
+  return ((prop && prop.values) || []).filter(v => v.value != null).map(v => {
+    const [t, d] = v.validTime.split("/"), a = Date.parse(t);
+    return {a, b: a + isoDurH(d) * 3600e3, v: v.value};
+  });
+}
+function overlap(x, a, b) { return Math.max(0, Math.min(x.b, b) - Math.max(x.a, a)) / (x.b - x.a); }
+const sliderFit = (id, v) => { const e = $(id), st = +e.step || 1; return Math.min(+e.max, Math.max(+e.min, Math.round(v / st) * st)); };
+async function getJson(u) { const r = await fetch(u, {headers: {Accept: "application/geo+json"}}); if (!r.ok) throw new Error(u + " " + r.status); return r.json(); }
+async function loadNWS() {
+  const st = $("nws"), p = D.prem[$("pm").value];
+  st.textContent = "Fetching current NWS conditions…";
+  try {
+    const lat = p.p[1].toFixed(2), lon = p.p[0].toFixed(2), now = Date.now();
+    const pt = (await getJson(`${NWS}/points/${lat},${lon}`)).properties;
+    const grid = getJson(pt.forecastGridData);
+    const stn = getJson(pt.observationStations).then(j => j.features.slice(0, 3).map(f => f.properties.stationIdentifier));
+    const g = (await grid).properties;
+    let gust = 0, rainF = 0, snowF = 0;
+    gridSeries(g.windGust).forEach(x => { if (overlap(x, now, now + 864e5) > 0) gust = Math.max(gust, x.v * KMH_MPH); });
+    gridSeries(g.quantitativePrecipitation).forEach(x => rainF += x.v * MM_IN * overlap(x, now, now + 864e5));
+    gridSeries(g.snowfallAmount).forEach(x => snowF += x.v * MM_IN * overlap(x, now, now + 864e5));
+    // Observations from the nearest station that reports: trailing 72 h
+    let rain24 = 0, rain3d = 0, obsGust = 0, used = "forecast only";
+    for (const id of await stn) {
+      try {
+        const o = await getJson(`${NWS}/stations/${id}/observations?start=${new Date(now - 72 * 3600e3).toISOString()}&limit=300`);
+        const hours = {};
+        o.features.forEach(f => {
+          const q = f.properties, t = Date.parse(q.timestamp), w = q.windGust && q.windGust.value;
+          if (w != null && now - t < 864e5) obsGust = Math.max(obsGust, /m_s/.test(q.windGust.unitCode) ? w * 2.23694 : w * KMH_MPH);
+          const pr = q.precipitationLastHour && q.precipitationLastHour.value;
+          if (pr != null) hours[Math.floor(t / 3600e3)] = pr;
+        });
+        const hk = Object.keys(hours);
+        if (hk.length) {
+          hk.forEach(h => { const age = now - h * 3600e3; if (age < 864e5) rain24 += hours[h] * MM_IN; else rain3d += hours[h] * MM_IN; });
+          used = "station " + id; break;
+        }
+      } catch (e) {}
+    }
+    const v = {gust: Math.max(gust, obsGust), rain: Math.max(rain24, rainF), snow: snowF, ante: rain3d, leaf: (new Date().getMonth() >= 4 && new Date().getMonth() <= 9) ? 1 : 0};
+    ["gust", "rain", "snow", "ante"].forEach(i => $(i).value = sliderFit(i, v[i]));
+    $("leaf").checked = !!v.leaf;
+    st.innerHTML = `Loaded from the National Weather Service for this area (${used}): worst of observed and next-24 h forecast gust ${f2(v.gust, 0)} mph, rain ${f2(v.rain, 2)} in, snow ${f2(v.snow, 1)} in, rain 24-72 h ago ${f2(v.ante, 2)} in. Sliders are free to change.`;
+  } catch (e) {
+    st.textContent = "Could not reach the National Weather Service, so the sliders keep their default values. You can still set them by hand.";
+  }
+  render();
+}
+
 // ---------------------------------------------------------------- setup
 D.prem.forEach((p, i) => {
   const o = document.createElement("option");
@@ -102,6 +159,7 @@ R.groups.length && ["Primary wire"].concat(R.groups).forEach(g => {
   const o = document.createElement("option"); o.value = g; o.textContent = g; $("ag").appendChild(o);
 });
 $("ag").value = "Pole";
+{ const b = document.createElement("button"); b.textContent = "Current NWS conditions"; b.onclick = loadNWS; $("presets").appendChild(b); }
 Object.keys(PRESETS).forEach(k => {
   const b = document.createElement("button"); b.textContent = PRESETS[k].n; b.dataset.k = k;
   b.onclick = () => {
@@ -131,14 +189,14 @@ function render() {
   const rs = restoration(), conf = confidence(x);
   $("gust_v").textContent = o.gust + " mph"; $("rain_v").textContent = f2(o.rain, 1) + " in";
   $("snow_v").textContent = f2(o.snow, 1) + " in"; $("ante_v").textContent = f2(o.ante, 1) + " in";
-  $("sevline").innerHTML = `Storm severity <b>${f2(x.sv.S)}</b> x Feb 2025 (${sevName(x.sv.S)}) · ${chip(SV.source)}`;
+  $("sevline").innerHTML = `Storm severity <b>${f2(x.sv.S)}</b> × Feb 2025 (${sevName(x.sv.S)}) · ${chip(SV.source)}`;
   $("hdpill").textContent = "Model trained " + M.generated.slice(0, 10) + " · anonymized data";
   const long = rs.hi >= 24, pre = band !== "Low" || p.ls, esc = p.ls || long || band === "Imminent";
   const range = rangeTxt(rs.lo, rs.hi);
   $("kpis").innerHTML =
-    `<div class="kpi"><small>Outage risk</small><div class="v" style="color:${col}">${band}</div>${bar(x.P, col)}<div class="n">${pc(x.P)} chance · 80% interval ${pc(x.Plo)}-${pc(x.Phi)} · confidence ${conf}</div></div>
+    `<div class="kpi"><small>Outage risk</small><div class="v" style="color:${col}">${band}</div>${bar(x.P, col)}<div class="n">${pc(x.P)} chance · 80% interval ${pc(x.Plo)}–${pc(x.Phi)} · confidence ${conf}</div></div>
 <div class="kpi"><small>Restoration estimate</small><div class="v">${range}</div><div class="n">after crews can safely start · typical (median) ${hrs(rs.hist.p50)} · scales with storm severity · model estimate</div></div>
-<div class="kpi"><small>Storm severity</small><div class="v">${sevName(x.sv.S)}</div><div class="n">${f2(x.sv.S)} x the Feb 2025 storm · weather weights ${SV.source}</div></div>
+<div class="kpi"><small>Storm severity</small><div class="v">${sevName(x.sv.S)}</div><div class="n">${f2(x.sv.S)} × the Feb 2025 storm · weather weights ${SV.source}</div></div>
 <div class="kpi"><small>Alerts</small><div class="v">${pre ? "Eligible" : "Not yet"}</div><div class="n">${esc ? "Human escalation triggered" : "Standard automated alerts"}</div></div>`;
   renderRisk(p, o, x, band, col);
   renderAlgo(p, o, x, band, conf);
@@ -155,12 +213,12 @@ function renderRisk(p, o, x, band, col) {
   const m0 = TYPICAL_ZONE * Math.exp(BETA[0]), m1 = m0 * Math.exp(sumC), m2 = m1 * x.sv.S, m3 = x.mu;
   const ST = [["Typical cell, Feb 2025-like storm", `typical zone of ${TYPICAL_ZONE} customers`, 1, m0],
     ["Your location’s features", "from the trained model, see below", Math.exp(sumC), m1],
-    ["Your storm conditions", `severity ${f2(x.sv.S)} x Feb 2025`, x.sv.S, m2],
+    ["Your storm conditions", `severity ${f2(x.sv.S)} × Feb 2025`, x.sv.S, m2],
     ["Your protection zone", `${x.zone} customers vs ${TYPICAL_ZONE} typical`, x.zone / TYPICAL_ZONE, m3]];
-  $("build").innerHTML = ST.map((s, i) => `<div class="bars"><div><b>${s[0]}</b><div class="mu">${s[1]}</div></div><div class="track"><i style="left:0;width:${Math.round(pNB(s[3], O.alpha) * 100)}%;background:${i === 3 ? col : "#d71920"};opacity:${i === 3 ? 1 : .45}"></i></div><div style="text-align:right;font-weight:700">${i ? "x" + f2(s[2]) + " · " : ""}${pc(pNB(s[3], O.alpha))}</div></div>`).join("");
+  $("build").innerHTML = ST.map((s, i) => `<div class="bars"><div><b>${s[0]}</b><div class="mu">${s[1]}</div></div><div class="track"><i style="left:0;width:${Math.round(pNB(s[3], O.alpha) * 100)}%;background:${i === 3 ? col : "#d71920"};opacity:${i === 3 ? 1 : .45}"></i></div><div style="text-align:right;font-weight:700">${i ? "×" + f2(s[2]) + " · " : ""}${pc(pNB(s[3], O.alpha))}</div></div>`).join("");
   $("featbars").innerHTML = FE.map((f, i) => {
     const c = x.ce.contrib[i], w = Math.min(50, Math.abs(c) * 45);
-    return `<div class="bars"><div>${f.label}</div><div class="track"><div class="mid"></div><i style="${c >= 0 ? "left:50%" : "right:50%"};width:${w}%;background:${c >= 0 ? "#d71920" : "#2e7d32"}"></i></div><b style="text-align:right">x${f2(Math.exp(c))}</b></div>`;
+    return `<div class="bars"><div>${f.label}</div><div class="track"><div class="mid"></div><i style="${c >= 0 ? "left:50%" : "right:50%"};width:${w}%;background:${c >= 0 ? "#d71920" : "#2e7d32"}"></i></div><b style="text-align:right">×${f2(Math.exp(c))}</b></div>`;
   }).join("");
   const V = [["Gust +10 mph", {gust: o.gust + 10}], ["Gust −10 mph", {gust: Math.max(15, o.gust - 10)}], ["Rain +1 in", {rain: o.rain + 1}],
     ["Snow +4 in", {snow: o.snow + 4}], ["Previous 3-day rain +1 in", {ante: o.ante + 1}], [o.leaf ? "Trees bare" : "Trees in leaf", {leaf: o.leaf ? 0 : 1}]];
@@ -170,12 +228,12 @@ function renderRisk(p, o, x, band, col) {
   }).join("");
   $("expl").innerHTML = `<table><tr><th>Feature of your cell</th><th class="r">Your value</th><th class="r">Typical</th><th class="r">Rate ratio per +1 SD (95% CI)</th><th>Reading</th></tr>` +
     FE.map((f, i) => { const t = O.terms[2 + i];
-      return `<tr><td><b>${f.label}</b><div class="mu">${f.desc}</div></td><td class="r">${f2(p.f[i])}</td><td class="r">${f2(f.mean)}</td><td class="r">${f2(t.rr)} (${f2(t.rr_lo)}-${f2(t.rr_hi)})</td><td>${FEAT_WHY[f.key]}</td></tr>`; }).join("") +
+      return `<tr><td><b>${f.label}</b><div class="mu">${f.desc}</div></td><td class="r">${f2(p.f[i])}</td><td class="r">${f2(f.mean)}</td><td class="r">${f2(t.rr)} (${f2(t.rr_lo)}–${f2(t.rr_hi)})</td><td>${FEAT_WHY[f.key]}</td></tr>`; }).join("") +
     `</table><div class="mu" style="margin-top:8px">These are statistical associations in two storms, not proven causes. Weather inputs enter through the storm-severity multiplier.</div>`;
   $("reasons").innerHTML = (() => {
     const rows = FE.map((f, i) => [f.label, x.ce.contrib[i]]).concat([["Storm conditions", x.sv.ls], ["Protection zone size", Math.log(x.zone / TYPICAL_ZONE)]])
       .sort((a, b) => Math.abs(b[1]) - Math.abs(a[1])).slice(0, 4);
-    return `<ul>${rows.map(r => `<li><b>${r[0]}</b> ${r[1] > .05 ? "raises" : r[1] < -.05 ? "lowers" : "barely changes"} your risk (x${f2(Math.exp(r[1]))} vs typical).</li>`).join("")}</ul><div class="mu">Open “Algorithm” to see every step with your numbers.</div>`;
+    return `<ul>${rows.map(r => `<li><b>${r[0]}</b> ${r[1] > .05 ? "raises" : r[1] < -.05 ? "lowers" : "barely changes"} your risk (×${f2(Math.exp(r[1]))} vs typical).</li>`).join("")}</ul><div class="mu">Open “Algorithm” to see every step with your numbers.</div>`;
   })();
 }
 
@@ -192,27 +250,27 @@ function renderAlgo(p, o, x, band, conf) {
 <div class="step"><div class="no">2</div><div><h3 style="margin-top:0">Damage rate per customer ${chip("learned")}</h3>
 <div class="formula">η = β₀ + Σ βᵢ·zᵢ = <b>${sg(BETA[0], 3)}</b> ${sg(sumC, 3)} = <b>${sg(x.ce.eta, 3)}</b>
 rate per customer = exp(η) = <b>${f2(Math.exp(x.ce.eta) * 1000, 2)}</b> damage records per 1,000 customers in a Feb 2025-like storm</div>
-<div class="mu">Negative binomial GLM with log link and ridge penalty λ=${O.l2}, fit on ${O.n_rows.toLocaleString()} cellxevent rows with ${O.n_damage.toLocaleString()} damage records.</div></div></div>
+<div class="mu">Negative binomial GLM with log link and ridge penalty λ=${O.l2}, fit on ${O.n_rows.toLocaleString()} cell×event rows with ${O.n_damage.toLocaleString()} damage records.</div></div></div>
 <div class="step"><div class="no">3</div><div><h3 style="margin-top:0">Storm severity multiplier ${chip(SV.source)}</h3>
 <table><tr><th>Input</th><th class="r">Your value</th><th class="r">Feb 2025 ref</th><th class="r">Δ</th><th class="r">Coefficient</th><th class="r">Δ·coef</th></tr>${sevRows}</table>
 <div class="formula">log S = Σ coefₖ·Δₖ = <b>${sg(x.sv.ls, 3)}</b>      S = exp(log S) = <b>${f2(x.sv.S, 3)}</b></div>
 <div class="${covNote ? "warn" : "fact"}">${covNote ? "<b>These weather weights are not learned.</b> " + SV.reason : "Weather weights learned from daily outage counts (" + SV.n_days + " days), blocked CV deviance skill " + f2(SV.cv_deviance_skill) + "."}</div></div></div>
 <div class="step"><div class="no">4</div><div><h3 style="margin-top:0">Customers behind your nearest protective device ${chip("assumption")}</h3>
 <div class="formula">zone = <b>${x.zone}</b> customers ${p.nd ? "(" + p.ch + ")" : "(no fuse or recloser upstream, so the whole circuit)"}
-expected damage records μ = zone x exp(η) x S = ${x.zone} x ${f2(Math.exp(x.ce.eta), 4)} x ${f2(x.sv.S, 3)} = <b>${f2(x.mu, 3)}</b></div>
+expected damage records μ = zone × exp(η) × S = ${x.zone} × ${f2(Math.exp(x.ce.eta), 4)} × ${f2(x.sv.S, 3)} = <b>${f2(x.mu, 3)}</b></div>
 <div class="mu">Assumes any damage inside the zone interrupts every customer behind it, and that cell-level dispersion applies to the zone (this likely overstates how much clustering a large zone has, so probabilities for large zones may run low).</div></div></div>
 <div class="step"><div class="no">5</div><div><h3 style="margin-top:0">Probability of an outage ${chip("standard")}</h3>
 <div class="formula">P(at least one) = 1 − (1 + α·μ)^(−1/α), with fitted α = <b>${f2(O.alpha, 2)}</b>
-P = 1 − (1 + ${f2(O.alpha, 2)}x${f2(x.mu, 3)})^(−${f2(1 / O.alpha, 3)}) = <b>${pc(x.P)}</b></div></div></div>
+P = 1 − (1 + ${f2(O.alpha, 2)}×${f2(x.mu, 3)})^(−${f2(1 / O.alpha, 3)}) = <b>${pc(x.P)}</b></div></div></div>
 <div class="step"><div class="no">6</div><div><h3 style="margin-top:0">Uncertainty ${chip("learned")}</h3>
 <div class="formula">Var(η) from the coefficient covariance = ${f2(x.ce.v, 4)}      Var(log S) = ${f2(x.sv.v, 4)}
 sd(log μ) = √(${f2(x.ce.v, 4)} + ${f2(x.sv.v, 4)}) = <b>${f2(x.sd, 3)}</b>
-80% interval: μ x exp(±${Z80}·sd) → P from <b>${pc(x.Plo)}</b> to <b>${pc(x.Phi)}</b></div>
+80% interval: μ × exp(±${Z80}·sd) → P from <b>${pc(x.Plo)}</b> to <b>${pc(x.Phi)}</b></div>
 <div class="mu">This captures coefficient uncertainty only, not model-structure error. The cross-validated checks in “Model &amp; validation” cover the rest.</div></div></div>
 <div class="step"><div class="no">7</div><div><h3 style="margin-top:0">Risk band and confidence ${chip("rule")}</h3>
 <div class="formula">bands: Low &lt; ${B.cuts[0] * 100}% ≤ Moderate &lt; ${B.cuts[1] * 100}% ≤ High &lt; ${B.cuts[2] * 100}% ≤ Imminent
 P = ${pc(x.P)} → <b>${band}</b>
-interval width ratio = P-scale exp(2·${Z80}·sd) = ${f2(x.ratio, 2)}x   → ${x.ratio < 2 ? "High" : x.ratio < 4 ? "Medium" : "Low"}${SV.source === "prior" ? ", lowered one step because the weather weights are a prior" : ""}
+interval width ratio = P-scale exp(2·${Z80}·sd) = ${f2(x.ratio, 2)}×   → ${x.ratio < 2 ? "High" : x.ratio < 4 ? "Medium" : "Low"}${SV.source === "prior" ? ", lowered one step because the weather weights are a prior" : ""}
 confidence = <b>${conf}</b></div></div></div>`;
 }
 
@@ -225,16 +283,16 @@ function renderRest(p, x, rs, range) {
 <div class="mu">Interval-censored log-normal AFT on ${R.n} closed Feb 2025 repairs (design “${R.selected_design}” chosen by leave-one-day-out CV).</div>
 <table><tr><th>Quantile (${$("ag").value})</th><th class="r">Time</th></tr><tr><td>Fast (P10)</td><td class="r">${hrs(H.p10)}</td></tr><tr><td>Typical (median)</td><td class="r">${hrs(H.p50)}</td></tr><tr><td>Slow (P90)</td><td class="r">${hrs(H.p90)}</td></tr></table></div>
 <div><h3 style="margin-top:0">Bottom-up labor ${chip("reference")}</h3>
-<div class="mu">Workbook hours x indirect multiplier ÷ crew.</div>
-${rs.hasDamage ? `<table><tr><td>Direct repair labor</td><td class="r">${f2(rs.dir, 1)} h</td></tr><tr><td>x multiplier ${f2(rs.mult, 1)}</td><td class="r">${f2(rs.tot, 0)} labor-h</td></tr><tr><td>÷ crew of ${rs.cr} (crew size ±1)</td><td class="r">${hrs(rs.bLo)}-${hrs(rs.bHi)}</td></tr>${rs.hasDamage ? `<tr><td>x storm severity ${f2(rs.S)}<sup>${f2(R.severity_scaling.beta, 2)}</sup> = ${f2(rs.sevMult, 2)}</td><td class="r"></td></tr>` : ""}${rs.blocked ? `<tr><td>Blocked access ${chip("assumption")}</td><td class="r">+2-8 h</td></tr>` : ""}</table>` : `<div class="mu">No damage entered, so only the historical range is shown.</div>`}</div></div>
+<div class="mu">Workbook hours × indirect multiplier ÷ crew.</div>
+${rs.hasDamage ? `<table><tr><td>Direct repair labor</td><td class="r">${f2(rs.dir, 1)} h</td></tr><tr><td>× multiplier ${f2(rs.mult, 1)}</td><td class="r">${f2(rs.tot, 0)} labor-h</td></tr><tr><td>÷ crew of ${rs.cr} (crew size ±1)</td><td class="r">${hrs(rs.bLo)}–${hrs(rs.bHi)}</td></tr>${rs.hasDamage ? `<tr><td>× storm severity ${f2(rs.S)}<sup>${f2(R.severity_scaling.beta, 2)}</sup> = ${f2(rs.sevMult, 2)}</td><td class="r"></td></tr>` : ""}${rs.blocked ? `<tr><td>Blocked access ${chip("assumption")}</td><td class="r">+2–8 h</td></tr>` : ""}</table>` : `<div class="mu">No damage entered, so only the historical range is shown.</div>`}</div></div>
 <h3>How the two are combined ${chip("rule")}</h3>
-<div class="mu">Both are multiplied by the storm-severity factor ${f2(rs.sevMult, 2)} (severity ${f2(rs.S)}x Feb 2025, raised to the learned power).</div>
+<div class="mu">Both are multiplied by the storm-severity factor ${f2(rs.sevMult, 2)} (severity ${f2(rs.S)}× Feb 2025, raised to the learned power).</div>
 <div class="formula">${rs.early ? "early step: low = historical P10, high = historical median" : "low = max(historical P10, bottom-up low)\nhigh = max(historical P90, bottom-up high)"}</div>
 <h3>What the data does and does not support</h3><ul>
-<li><b>Asset type matters:</b> ${aft.map(t => `${t.name.replace("asset:", "")} x${f2(t.tr)}`).join(", ")} the time of primary wire.</li>
-<li><b>Storm-severity scaling ${chip("learned")}:</b> current storm severity ${f2(rs.S)}x → expected workload x${f2(rs.S)} → all repair times x${f2(rs.sevMult, 2)} (S<sup>${f2(R.severity_scaling.beta, 2)}</sup>). Fitted by the pipeline on daily workload in Feb 2025 (SE ${f2(R.severity_scaling.se, 2)}); cross-validation did <b>not</b> select that term (${sg(R.severity_scaling.cv_gain_vs_asset_only_per_record, 3)} held-out log-lik/record), so the data supports at most a weak effect.${rs.extrap ? " Current severity is outside the range seen in training, so the multiplier is an extrapolation and is not capped." : ""} The severity itself uses ${SV.source} weather weights.</li>
-<li><b>Blocked access</b> was rejected by cross-validation; its +2-8 h is an operator assumption. ${chip("assumption")}</li>
-<li><b>Calibrated to a Feb 2025-scale event only.</b> Sep 2024 repair gaps all fall at 23-26 days, which looks like batch close-out, so that event was excluded. Milder or harsher storms were not learned.</li>
+<li><b>Asset type matters:</b> ${aft.map(t => `${t.name.replace("asset:", "")} ×${f2(t.tr)}`).join(", ")} the time of primary wire.</li>
+<li><b>Storm-severity scaling ${chip("learned")}:</b> current storm severity ${f2(rs.S)}× → expected workload ×${f2(rs.S)} → all repair times ×${f2(rs.sevMult, 2)} (S<sup>${f2(R.severity_scaling.beta, 2)}</sup>). Fitted by the pipeline on daily workload in Feb 2025 (SE ${f2(R.severity_scaling.se, 2)}); cross-validation did <b>not</b> select that term (${sg(R.severity_scaling.cv_gain_vs_asset_only_per_record, 3)} held-out log-lik/record), so the data supports at most a weak effect.${rs.extrap ? " Current severity is outside the range seen in training, so the multiplier is an extrapolation and is not capped." : ""} The severity itself uses ${SV.source} weather weights.</li>
+<li><b>Blocked access</b> was rejected by cross-validation; its +2–8 h is an operator assumption. ${chip("assumption")}</li>
+<li><b>Calibrated to a Feb 2025-scale event only.</b> Sep 2024 repair gaps all fall at 23–26 days, which looks like batch close-out, so that event was excluded. Milder or harsher storms were not learned.</li>
 <li><b>Heavier tail than shown:</b> ${f2(rs.neverPct, 1)}% of Feb 2025 records were never marked repaired and are excluded from this conditional model. Including them as censored raises σ from ${f2(R.sigma, 2)} to ${f2(R.sensitivity_with_censored.sigma, 2)}.</li>
 <li>Dates have no clock time, so precision is about one day.</li></ul>
 <div class="mu">Could move it: crew count, blocked roads, extra damage found, damage upstream.</div>`;
@@ -277,10 +335,10 @@ function renderMeth() {
 <h3>Where every heuristic comes from</h3>
 <table><tr><th>Piece</th><th>Status</th><th>How</th></tr>${M.provenance.map(r => `<tr><td>${r.item}</td><td>${chip(r.status)}</td><td>${r.how}</td></tr>`).join("")}</table>
 <h3>Training data</h3><ul><li>${d.arcos_records.toLocaleString()} ARCOS damage records; ${d.arcos_by_event.Feb2025} in Feb 2025, ${d.arcos_by_event.Sep2024} in Sep 2024, ${d.arcos_by_event.Other} outside those events.</li>
-<li>${d.panel_rows.toLocaleString()} cellxevent rows (${d.panel_positive_rows} with damage). ${d.arcos_no_customer_cell} damage records fell in cells with no customers and were excluded.</li>
+<li>${d.panel_rows.toLocaleString()} cell×event rows (${d.panel_positive_rows} with damage). ${d.arcos_no_customer_cell} damage records fell in cells with no customers and were excluded.</li>
 <li>${d.premises_with_topology.toLocaleString()} premises with topology; ${d.premises_without_protective_device.toLocaleString()} have no protective device upstream.</li></ul>
 <h3>Outage model coefficients ${chip("learned")}</h3>
-<table><tr><th>Term</th><th class="r">β</th><th class="r">SE</th><th class="r">Rate ratio</th><th class="r">95% CI</th></tr>${O.terms.map(t => `<tr><td>${t.name}</td><td class="r">${sg(t.beta, 3)}</td><td class="r">${f2(t.se, 3)}</td><td class="r">${f2(t.rr)}</td><td class="r">${f2(t.rr_lo)}-${f2(t.rr_hi)}</td></tr>`).join("")}</table>
+<table><tr><th>Term</th><th class="r">β</th><th class="r">SE</th><th class="r">Rate ratio</th><th class="r">95% CI</th></tr>${O.terms.map(t => `<tr><td>${t.name}</td><td class="r">${sg(t.beta, 3)}</td><td class="r">${f2(t.se, 3)}</td><td class="r">${f2(t.rr)}</td><td class="r">${f2(t.rr_lo)}–${f2(t.rr_hi)}</td></tr>`).join("")}</table>
 <div class="mu">Features are standardized, so rate ratios are per +1 SD. Dispersion α=${f2(O.alpha, 2)} (strong clustering: damage arrives in bursts).</div>
 <h3>Cross-validation (${O.cv.folds}-fold, grouped by circuit)</h3>
 <div class="two"><div><table><tr><th>Model</th><th class="r">Deviance skill</th><th class="r">AUC</th><th class="r">Brier skill</th><th class="r">Circuit ρ</th></tr>${r("Exposure only (baseline)", cv.exposure_only)}${r("Negative binomial GLM (used)", cv.nbglm)}${r("Gradient-boosted Poisson", cv.gbm_poisson)}</table>
@@ -288,9 +346,9 @@ function renderMeth() {
 <div>${calibSvg(O.cv.calibration)}<div class="mu">Calibration: points near the dashed line mean predicted chances match what happened.</div></div></div>
 <div class="${T.auc_any_damage < T.auc_baseline ? "warn" : "fact"}" style="margin-top:8px"><b>Transfer test (train on Feb 2025, predict Sep 2024):</b> deviance skill ${f2(T.deviance_skill, 3)}, AUC ${f2(T.auc_any_damage, 3)} vs ${f2(T.auc_baseline, 3)} for the baseline. The spatial pattern carries over only weakly, consistent with storm path dominating.</div>
 <h3>Restoration model selection (leave-one-report-day-out)</h3>
-<table><tr><th>Design</th><th class="r">Held-out log-lik gain / record</th><th class="r">P10-P90 coverage (target 80%)</th></tr>${Object.keys(rc).map(k => `<tr><td>${k}${k === R.cv.selected ? " " + chip("learned") + " selected" : ""}</td><td class="r">${sg(rc[k].gain_vs_null_per_record, 4)}</td><td class="r">${pc(rc[k].coverage_p10_p90)}</td></tr>`).join("")}</table>
+<table><tr><th>Design</th><th class="r">Held-out log-lik gain / record</th><th class="r">P10–P90 coverage (target 80%)</th></tr>${Object.keys(rc).map(k => `<tr><td>${k}${k === R.cv.selected ? " " + chip("learned") + " selected" : ""}</td><td class="r">${sg(rc[k].gain_vs_null_per_record, 4)}</td><td class="r">${pc(rc[k].coverage_p10_p90)}</td></tr>`).join("")}</table>
 <h3>Severity weights ${chip(SV.source)}</h3>
-<div class="${dg.severity_agrees_with_events ? "fact" : "warn"}">${SV.source === "prior" ? "No weather data reached the pipeline, so these weights are assumptions. " : ""}Illustrative Sep-2024-like weather implies severity ${f2(dg.severity_implied_sep_over_feb, 2)}x Feb 2025; the observed damage ratio between the events is ${f2(dg.observed_sep_over_feb_damage_ratio, 2)}x. ${dg.severity_agrees_with_events ? "These agree within 1.5x." : "They disagree by more than 1.5x, and the weather values for Sep 2024 are my guesses, so treat the severity scale as uncalibrated until weather data is fetched (weather.py) and the model is retrained."}</div>
+<div class="${dg.severity_agrees_with_events ? "fact" : "warn"}">${SV.source === "prior" ? "No weather data reached the pipeline, so these weights are assumptions. " : ""}Illustrative Sep-2024-like weather implies severity ${f2(dg.severity_implied_sep_over_feb, 2)}× Feb 2025; the observed damage ratio between the events is ${f2(dg.observed_sep_over_feb_damage_ratio, 2)}×. ${dg.severity_agrees_with_events ? "These agree within 1.5×." : "They disagree by more than 1.5×, and the weather values for Sep 2024 are my guesses, so treat the severity scale as uncalibrated until weather data is fetched (weather.py) and the model is retrained."}</div>
 <h3>Privacy and fallback</h3><p>Premise IDs are re-numbered, the map shows only a ≈400 m cell, fire-station distance is banded, and only cell-level features reach the browser. No addresses, premise numbers, exact coordinates, crew details or sensitive-facility locations appear. Only declared flags are used. If a premise cannot be matched, the concierge should decline to estimate and point to the official outage map and phone line.</p>
 <h3>Retrain with new data</h3><div class="formula">python pipeline/run_pipeline.py --raw-dir data/raw --topology data/raw/matched_upstream.txt \\
     --labor data/raw/Install_Labor_HackOHIO.xlsx [--fetch-weather]</div>`;
@@ -362,4 +420,4 @@ $("b3d").onclick = () => { if (map && mapReady) map.easeTo({pitch: map.getPitch(
 $("bfit").onclick = focusMap;
 document.querySelectorAll(".inp,#pm,#lv_d,#lv_v,#lv_c").forEach(e => e.addEventListener("input", render));
 $("mu").value = L.indirect_multiplier;
-showTab("over"); render(); if (!window.__NOMAP) initMap();
+showTab("over"); render(); if (!window.__NOMAP) { initMap(); loadNWS(); }

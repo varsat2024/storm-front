@@ -10,8 +10,8 @@ header{background:#fff;border-bottom:1px solid var(--ln);border-top:5px solid va
 .hd .pill{margin-left:auto;font-size:11.5px;border:1px solid var(--ln);color:var(--mu);padding:4px 10px;border-radius:99px;background:var(--soft)}
 .wrap{max-width:1360px;margin:0 auto;padding-block:18px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));display:grid;grid-template-columns:340px 1fr;gap:18px;align-items:start}
 @media(max-width:940px){.wrap{grid-template-columns:1fr}}
-aside{position:sticky;top:12px;max-height:calc(100vh - 24px);overflow:auto;display:flex;flex-direction:column;gap:12px}
-@media(max-width:940px){aside{position:static;max-height:none}}
+aside{display:flex;flex-direction:column;gap:10px}aside .card{overflow:visible;padding:12px 14px}aside label{margin:7px 0 2px}aside h2{margin-bottom:6px}aside .chk{margin:5px 0}aside .chips{gap:5px}aside .chips button{padding:4px 9px;font-size:12px}
+
 .card{background:var(--card);border:1px solid var(--ln);border-radius:4px;padding:16px}
 h2{font-size:12px;margin:0 0 10px;text-transform:uppercase;letter-spacing:.09em;color:var(--red);font-weight:700}
 h3{font-size:15px;margin:14px 0 6px}

@@ -21,8 +21,9 @@ raw shapefiles/DBF + topology + labor xlsx (+ weather)
 pip install numpy pandas scipy scikit-learn openpyxl          # no statsmodels needed
 python tests/test_models.py && python tests/test_severity.py   # estimators recover simulated parameters
 cd pipeline
-python run_pipeline.py --zips Data1.zip Data2.zip --raw-dir ../data/raw \
-    --topology ../data/raw/matched_upstream.txt --labor ../data/raw/Install_Labor_HackOHIO.xlsx \
+python run_pipeline.py --zips ../data/raw/Data1.zip ../data/raw/Data2.zip \ 
+    --raw-dir ../data/raw --topology ../data/raw/matched_upstream.txt \ 
+    --labor ../data/raw/Install_Labor_HackOHIO.xlsx
     [--fetch-weather]
 ```
 
