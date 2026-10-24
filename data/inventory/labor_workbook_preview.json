@@ -1,0 +1,171 @@
+{
+  "sheets": [
+    {
+      "name": "CNC",
+      "preview_rows": [
+        [
+          "CD_CU",
+          "INSTALL_HOURS",
+          "REMOVE_HOURS",
+          null,
+          "Connector CU Average Hours",
+          null,
+          null
+        ],
+        [
+          "CNC-HTA-10",
+          0.096,
+          0.016,
+          null,
+          "CU Count",
+          "Avg Install Hours",
+          "Avg Removal Hours"
+        ],
+        [
+          "CNC-HTA-40",
+          0.096,
+          0.016,
+          null,
+          "=COUNTA(A2:A96)",
+          "=AVERAGE(B2:B96)",
+          "=AVERAGE(C2:C96)"
+        ],
+        [
+          "CNC-HTA3-10",
+          0.096,
+          0.016,
+          null,
+          null,
+          null,
+          null
+        ],
+        [
+          "CNC-HTA3-40",
+          0.096,
+          0.016,
+          null,
+          "Includes all connector CU sizes and valid zero-hour records.",
+          null,
+          null
+        ]
+      ]
+    },
+    {
+      "name": "Labor time material related",
+      "preview_rows": [
+        [
+          "Crossarm CU Average Hours",
+          null,
+          null,
+          null
+        ],
+        [
+          "Avg Install Hours",
+          "Avg Removal Hours",
+          null,
+          null
+        ],
+        [
+          0.3741146496815283,
+          0.21217834394904417,
+          null,
+          null
+        ],
+        [
+          null,
+          null,
+          null,
+          null
+        ],
+        [
+          "Bracket CU Average Hours",
+          null,
+          null,
+          null
+        ]
+      ]
+    },
+    {
+      "name": "Labor only work",
+      "preview_rows": [
+        [
+          "Original Intent",
+          "Anonymized Work Type",
+          "Anonymized Labor Description",
+          "INSTALL_HOURS",
+          null
+        ],
+        [
+          "Difficult Location",
+          "Restricted Access Work",
+          "Additional labor required when work is performed in locations with limited access, increased setup requirements, or reduced equipment maneuverability.",
+          0.5,
+          null
+        ],
+        [
+          "Backyard Adder",
+          "Confined Property Access",
+          "Additional labor required when work occurs in areas with restricted equipment access and higher material handling effort.",
+          0.5,
+          null
+        ],
+        [
+          "Off-Road / Track Access",
+          "Remote Site Access",
+          "Additional labor required when personnel, materials, or equipment must travel over non-standard access routes.",
+          0.5,
+          null
+        ],
+        [
+          "Hand Dig",
+          "Manual Excavation",
+          "Additional labor required when excavation activities cannot be performed using conventional equipment.",
+          1.5,
+          "per cubic foot"
+        ]
+      ]
+    },
+    {
+      "name": "Indirect Labor Multiplier",
+      "preview_rows": [
+        [
+          "Indirect labor multipler (ILM)",
+          4.5
+        ],
+        [
+          null,
+          null
+        ],
+        [
+          "The ILM should be mutiplied time any labor hours to take into account drive time, safety discussion time, set up time, etc.",
+          null
+        ]
+      ]
+    },
+    {
+      "name": "CU Group descriptions",
+      "preview_rows": [
+        [
+          "Category",
+          "Suggested Anonymous Description"
+        ],
+        [
+          "ARM",
+          "Install, remove, or relocate structural support components used to mount equipment and accessories such as crossarms."
+        ],
+        [
+          "BKT",
+          "Install, remove, or relocate attachment hardware such as brackets used to secure devices to supporting structures."
+        ],
+        [
+          "POL",
+          "Perform work involving installation, replacement, modification, or adjustment of a primary supporting structure."
+        ],
+        [
+          "ANC",
+          "Install, remove, or relocate subsurface anchor support systems used to provide lateral stability to infrastructure."
+        ]
+      ]
+    }
+  ]
+}

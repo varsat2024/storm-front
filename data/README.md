@@ -1,28 +1,37 @@
 # Challenge data
 
-Datasets supplied for the AEP HackOHI/O 2026 AI Outage Concierge challenge.
+Datasets for the AEP HackOHI/O 2026 AI Outage Concierge challenge. Full inventory: [`inventory/DATA_DICTIONARY.md`](inventory/DATA_DICTIONARY.md).
 
-## Inventory
+## Layout
 
-| File | Contents | Compressed size |
-| --- | --- | --- |
-| `raw/Data1.zip` | GIS shapefiles for customers, poles, primary lines, fuse banks, damage assessments, ambulance services, fire stations, and hospitals | 18.3 MiB |
-| `raw/Data2.zip` | GIS shapefiles for secondary lines, transformers, switches, and recloser banks | 12.1 MiB |
-| `raw/matched_upstream.zip` | `matched_upstream.txt`: upstream/topology relationships described in the challenge | 1.4 MiB |
+| Path | Contents |
+| --- | --- |
+| `raw/Data1.zip` | Archive of Data1 shapefiles (18.3 MiB) |
+| `raw/Data1/` | **Organized** GIS: ARCOS damage, circuit GIS (customers, primary, poles, fuses), priority locations |
+| `raw/Data2.zip` | Archive of Data2 shapefiles (12.1 MiB) |
+| `raw/Data2/` | **Organized** GIS: secondary lines, transformers, switches, reclosers |
+| `raw/matched_upstream/` | `matched_upstream.txt` — upstream topology (§4.3) |
+| `Install_Labor_HackOHIO.xlsx` | STORMS labor hours & indirect multiplier (§4.4) |
+| `inventory/` | JSON schemas, data dictionary, `generate_inventory.py` |
 
-`Install_Labor_HackOHIO.xlsx` is the supplied installation/labor reference workbook. The challenge brief and structure diagrams are in [`../docs/`](../docs/).
+See [`raw/Data1/README.md`](raw/Data1/README.md) and [`raw/Data2/README.md`](raw/Data2/README.md) for layer tables.
 
-## Extract locally
+## Extract from zip (optional)
 
-From the repository root, using `unzip`:
+If you only have the zips, extract into the same folder structure (flat filenames). Then run the organizer to match the repo layout:
 
-```bash
-mkdir -p data/extracted/Data1 data/extracted/Data2 data/extracted/matched_upstream
-unzip -n data/raw/Data1.zip -d data/extracted/Data1
-unzip -n data/raw/Data2.zip -d data/extracted/Data2
-unzip -n data/raw/matched_upstream.zip -d data/extracted/matched_upstream
+```powershell
+Expand-Archive -Path data/raw/Data1.zip -DestinationPath data/raw/Data1 -Force
+Expand-Archive -Path data/raw/Data2.zip -DestinationPath data/raw/Data2 -Force
+python data/inventory/organize_raw_gis.py
 ```
 
-The `-n` option avoids overwriting existing files. Extracted files are ignored by Git.
+Legacy `data/extracted/` paths from earlier docs are equivalent to `raw/Data1` and `raw/Data2` once organized; extracted copies remain gitignored.
 
-Keep each shapefile's `.shp`, `.shx`, `.dbf`, `.prj`, and other companion files together.
+## Processing notes
+
+- Keep each shapefile’s companion files together in its layer directory.
+- Use `matched_upstream.txt` for electrical connectivity; do not infer topology from distance alone.
+- Regenerate JSON inventories: `python data/inventory/generate_inventory.py` (needs `pyshp`, `openpyxl`).
+
+Challenge brief: [`../docs/AEP_Challenge_Track_Explanation.md`](../docs/AEP_Challenge_Track_Explanation.md).
