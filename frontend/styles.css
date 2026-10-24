@@ -38,6 +38,10 @@ ul{margin:4px 0 4px 18px;padding:0}li{margin:3px 0}.mu{color:var(--mu);font-size
 table{border-collapse:collapse;width:100%;font-size:13px}td,th{padding:6px 8px;border-bottom:1px solid var(--ln);text-align:left;vertical-align:top}
 th{color:var(--mu);font-weight:700;font-size:11.5px;text-transform:uppercase;letter-spacing:.05em;background:var(--soft)}
 td.r,th.r{text-align:right;font-variant-numeric:tabular-nums}
+.circuit-schedule{min-width:2100px;font-size:12px}
+.circuit-schedule th{position:sticky;top:0;z-index:1}
+.circuit-schedule td:nth-child(11),.circuit-schedule td:nth-child(12),.circuit-schedule td:nth-child(13),.circuit-schedule td:nth-child(14){min-width:150px;white-space:nowrap}
+.circuit-schedule td:nth-child(15){min-width:320px;max-width:430px}
 .chip{display:inline-block;font-size:11px;font-weight:700;padding:1px 8px;border-radius:99px;border:1px solid var(--ln);background:var(--soft);color:var(--mu);white-space:nowrap}
 .chip.learned{background:#e8f3ec;border-color:#9fcfae;color:#1f6b3a}.chip.prior,.chip.assumption,.chip.rule{background:#fff4e5;border-color:#f0c78e;color:#8a5200}
 .chip.standard,.chip.reference{background:#eef1f6;border-color:#c5cddb;color:#3a4a66}.chip.bad{background:var(--red-l);border-color:#f2a3a8;color:var(--red-d)}
