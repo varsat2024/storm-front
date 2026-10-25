@@ -323,7 +323,14 @@ def format_status_for_llm(status: dict) -> str:
         f"- Premise: {status['premise_id']} on circuit {status['circuit_label']} "
         f"(≈400 m cell, {status['customers_in_cell']} customers in cell)\n"
         f"- Outage risk: {o['band']} ({o['probability_display']} chance, confidence {o['confidence']}, "
-        f"80% interval {o['interval_80pct']['display']})\n"
+        f"80% interval {o['interval_80pct']['display']}). "
+        f"Weather weights source: {status['severity_weights_source']}"
+        + (
+            " (prior: confidence label was lowered one step)."
+            if status.get("severity_weights_source") == "prior"
+            else " (learned from outage history: confidence was not lowered for weather weights)."
+        )
+        + "\n"
         f"- Storm severity: {st['severity_label']} ({st['severity_multiplier']:.2f}× Feb 2025 reference)\n"
         f"- Restoration estimate (model): {status['restoration']['estimate_range']} after crews can safely start\n"
         f"- Pre-storm alerts eligible: {'yes' if al['pre_storm_eligible'] else 'no'}; "
