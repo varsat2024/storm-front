@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 
 import config as C
+from privacy import harden_premises
 from features import FEATURES
 from gis_io import read_dbf, read_points, read_polylines, web_mercator_to_lonlat
 
@@ -57,6 +58,10 @@ def main(raw_dir=C.RAW_DIR):
             "fk": round(float(r.fk), 1), "hk": round(float(r.hk), 1),
             "p": [round(float((c.cx + .5) * C.CELL_LON), 5), round(float((c.cy + .5) * C.CELL_LAT), 5)],
             "f": [round(float(c[kk]), 4) for kk in KEYS], "cn": int(c.n)})
+
+    # ---- privacy floor: no premise in a tiny cell, banded distances, re-numbered ids (see privacy.py)
+    out_prem, n_dropped = harden_premises(out_prem)
+    print(f"privacy: dropped {n_dropped} premises in cells with < {C.MIN_CELL_CUSTOMERS} customers")
 
     # ---- circuits
     arc["circuit"] = arc.cell.map(lambda x: cells.circuit.get(x) if x >= 0 else None)

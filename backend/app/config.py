@@ -11,6 +11,8 @@ AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
 # Must be enabled in your AWS account under Bedrock > Model access
 MODEL_ID = "us.amazon.nova-2-lite-v1:0"
 MAX_TOKENS = 1024
+# Low temperature: this assistant gives safety-relevant guidance, so it should be consistent rather than creative.
+TEMPERATURE = float(os.getenv("CHAT_TEMPERATURE", "0.2"))
 
 # Mapbox Geocoding v6 forward (https://api.mapbox.com/search/geocode/v6/forward)
 MAPBOX_ACCESS_TOKEN = (

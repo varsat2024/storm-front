@@ -108,6 +108,31 @@ CORS is open for development (`backend/app/main.py`). Tighten before production.
 
 ---
 
+## Reliability, privacy and safety controls
+
+| Control | Where | What it does |
+|---|---|---|
+| Abstain outside the served area | `backend/app/guards.py`, `location_status.py` | A geocoded address must be within 1.5 km of a served 400 m cell and within 8 km of a demo premise. Otherwise `/status` returns 422 and `/chat` returns a decline message **without calling the LLM**. The nearest-premise match is reported as `match_quality` (close / approximate). |
+| One set of risk bands | `visualizer_engine.band_of_probability` | The alert email and the chat/visualizer read the cutoffs from `model.json`. |
+| Grounded explanations | `visualizer_engine.explanation` | The LLM snapshot now includes the top contributing factors, which parts are assumptions (e.g. the storm-severity prior) and the limits. |
+| Vetted safety content | `backend/app/safety_guidance.py` | Downed-line / generator / preparation / declared-need guidance is fixed text, passed to the LLM as the only advice it may give, and used verbatim in the fallback reply. |
+| LLM-outage fallback | `backend/app/chat_core.py` | If Bedrock fails (e.g. expired temporary credentials) the customer gets a deterministic reply built from the computed status, flagged `fallback: true`. Error details go to the server log, not the customer. |
+| Input hygiene | `guards.validate_messages`, request models | Length caps, control/bidi-character stripping, bounded numeric inputs, enum-limited scenario fields, temperature 0.2. The street address is **not** put in the prompt. |
+| Audit trail | `backend/app/audit.py` | JSON lines with request id, outcome (answered / abstained / fallback), band, premise id and a hash of the last message. No message text, no address. |
+| Published-data privacy | `pipeline/privacy.py` | Premises in cells with fewer than 20 customers are not published; fire/hospital distances rounded to 0.5 km; facility markers rounded to ~1 km; ids re-numbered. `python pipeline/privacy.py` re-applies this to an existing `site/`. |
+| CORS | `backend/app/main.py` | Local demo origins only (set `CORS_ORIGINS`), no credentials. |
+
+Tests: `cd backend && python -m unittest tests.test_guards tests.test_alerts`.
+
+**Important:** `site/index.html` and `site/artifact.html` were edited after they were last built, so they no longer match
+`frontend/` + `pipeline/build_frontend.py` (rebuilding would drop the address validation, markdown chat and other
+changes). Treat `site/index.html` as the source of truth until `frontend/` is brought back in sync.
+
+**Known limits (not fixed here):** the storm-severity weights are still a prior, not learned; the AFT restoration fit
+reports `converged: false` and its interval is wide; the conversation history is still supplied by the client; the
+alert email trigger (25%) differs from the UI's "qualifies when risk is not Low" rule; only the pre-storm message is
+wired to delivery.
+
 ## Run (training pipeline)
 
 ```

@@ -6,6 +6,7 @@ from typing import Any
 import httpx
 
 from app.artifacts_loader import load_data, load_model
+from app import guards
 from app.geocode import geocode_address
 from app.grid_exposure import (
     compute_exposure_risks,
@@ -43,20 +44,28 @@ def resolve_location_index(
     meta: dict[str, Any] | None = None
     pid = normalize_customer_id(customer_id, premise_id)
     if address:
-        geo = geocode_address(address)
+        if len(address) > guards.MAX_ADDRESS_CHARS:
+            raise ValueError(f"Addresses are limited to {guards.MAX_ADDRESS_CHARS} characters.")
+        try:
+            geo = geocode_address(guards.clean_text(address, guards.MAX_ADDRESS_CHARS))
+        except OSError as e:             # network failure, timeout, DNS: tell the caller to retry, never guess a location
+            raise guards.Abstain("geocoder_unavailable", str(e)) from e
         lon, lat = geo["longitude"], geo["latitude"]
+        idx, match = guards.locate(data, lon, lat)          # raises Abstain when outside the served area
         meta = {
             "input_address": address.strip(),
             "longitude": lon,
             "latitude": lat,
             "geocoder": geo.get("geocoder"),
             "formatted_address": geo.get("formatted_address"),
+            **match,
         }
-        return resolve_premise_index(data, latitude=lat, longitude=lon), meta
+        return idx, meta
     if pid:
         return resolve_premise_index(data, premise_id=pid), meta
     if latitude is not None and longitude is not None:
-        return resolve_premise_index(data, latitude=latitude, longitude=longitude), meta
+        idx, match = guards.locate(data, longitude, latitude)
+        return idx, match
     raise ValueError("Provide customer_id, premise_id, address, or latitude+longitude.")
 
 

@@ -39,3 +39,8 @@ BAND_NAMES = ["Low", "Moderate", "High", "Imminent"]
 N_DEMO_PREMISES = 200
 N_DEMO_LIFE_SUPPORT = 14
 N_DEMO_NO_DEVICE = 20
+
+# Privacy of the published demo data (see privacy.py)
+MIN_CELL_CUSTOMERS = 20   # premises in 400 m cells with fewer customers are not published (k-anonymity style floor)
+DIST_BAND_KM = 0.5        # distances to fire stations / hospitals are rounded to this band
+FACILITY_DECIMALS = 2     # facility marker coordinates rounded to 0.01 degree (~1 km)

@@ -24,6 +24,11 @@ def _band_of(p: float, cuts: list[float], names: list[str]) -> str:
     return names[3]
 
 
+def band_of_probability(p: float, model: dict) -> str:
+    """Risk band for a probability using the cutoffs in model.json (the single source of truth for every caller)."""
+    return _band_of(p, model["bands"]["cuts"], model["bands"]["names"])
+
+
 def _pc(p: float) -> str:
     if p < 0.001:
         return "<0.1%"
@@ -228,6 +233,42 @@ def _restoration(storm: dict, scenario: dict, model: dict, data: dict, prem: dic
     }
 
 
+def top_factors(x: dict, model: dict, n: int = 3) -> list[dict[str, Any]]:
+    """The cell features that move this location's expected damage most versus a typical cell (from the fitted GLM)."""
+    fe = model["outage"]["features"]
+    contrib = x["ce"]["contrib"]
+    order = sorted(range(len(contrib)), key=lambda i: abs(contrib[i]), reverse=True)[:n]
+    out = []
+    for i in order:
+        c = contrib[i]
+        if abs(c) < 0.02:      # under ~2%: not worth telling the customer
+            continue
+        out.append({
+            "factor": fe[i]["label"],
+            "direction": "raises" if c > 0 else "lowers",
+            "effect_pct": round((math.exp(c) - 1) * 100),
+        })
+    return out
+
+
+def explanation(x: dict, model: dict) -> dict[str, Any]:
+    """Plain-language grounding for the assistant: main factors, what is assumed rather than learned, and limits."""
+    assumed = [
+        f"{r['item']}: {r['how']}"
+        for r in model.get("provenance", [])
+        if r.get("status") in ("prior", "assumption")
+    ]
+    return {
+        "top_factors": top_factors(x, model),
+        "assumptions": assumed,
+        "limitations": [
+            "This is a model estimate, not confirmed utility information.",
+            "Restoration ranges are wide because past repairs varied a lot; they are not a promise.",
+            "Conditions that would change the answer: actual storm track and strength, where damage really occurs, crew availability and road access.",
+        ],
+    }
+
+
 def default_storm() -> dict[str, float | int]:
     return {"gust": 55.0, "rain": 2.0, "snow": 0.0, "ante": 2.5, "leaf": 0}
 
@@ -309,6 +350,17 @@ def compute_status(
                 if ok
             ],
         },
+        "explanation": explanation(x, model),
+        "reliability": {
+            "severity_weights": model["severity"]["source"],
+            "confidence": conf,
+            "caveat": (
+                "Storm-severity weights are engineering assumptions, not learned from outage data, so treat the "
+                "storm-dependent numbers as scenario estimates."
+                if model["severity"]["source"] == "prior" else
+                "Storm-severity weights were fitted to outage data."
+            ),
+        },
         "model_generated": model.get("generated"),
         "severity_weights_source": model["severity"]["source"],
     }
@@ -328,5 +380,23 @@ def format_status_for_llm(status: dict) -> str:
         f"- Restoration estimate (model): {status['restoration']['estimate_range']} after crews can safely start\n"
         f"- Pre-storm alerts eligible: {'yes' if al['pre_storm_eligible'] else 'no'}; "
         f"human escalation: {'yes' if al['human_escalation'] else 'no'}\n"
-        f"- Life-support flag on account: {'yes' if status['life_support_declared'] else 'no'}"
+        f"- Life-support flag on account: {'yes' if status['life_support_declared'] else 'no'}\n"
+        + _explanation_lines(status)
     )
+
+
+def _explanation_lines(status: dict) -> str:
+    ex = status.get("explanation") or {}
+    rel = status.get("reliability") or {}
+    lines = []
+    factors = ex.get("top_factors") or []
+    if factors:
+        lines.append("- Main factors for this location: " + "; ".join(
+            f"{f['factor']} {f['direction']} expected damage by about {abs(f['effect_pct'])}% versus a typical cell" for f in factors))
+    if ex.get("assumptions"):
+        lines.append("- Assumptions (not learned from data; say so when relevant): " + " | ".join(ex["assumptions"]))
+    if rel:
+        lines.append(f"- Reliability: severity weights are '{rel.get('severity_weights')}'. {rel.get('caveat', '')}")
+    if ex.get("limitations"):
+        lines.append("- Limits: " + " ".join(ex["limitations"]))
+    return "\n".join(lines)

@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field, model_validator
 
+from app.guards import Abstain
 from app.location_status import build_location_status, resolve_location_index
 from app.artifacts_loader import load_data
 
@@ -20,16 +21,16 @@ class StormBody(BaseModel):
 
 
 class ScenarioBody(BaseModel):
-    n_pole: float = Field(1, ge=0)
-    n_arm: float = Field(1, ge=0)
-    n_xf: float = Field(0, ge=0)
-    n_ins: float = Field(3, ge=0)
-    n_wire: float = Field(2, ge=0)
-    n_rec: float = Field(0, ge=0)
-    asset_group: str = "Pole"
+    n_pole: float = Field(1, ge=0, le=200)
+    n_arm: float = Field(1, ge=0, le=200)
+    n_xf: float = Field(0, ge=0, le=200)
+    n_ins: float = Field(3, ge=0, le=200)
+    n_wire: float = Field(2, ge=0, le=200)
+    n_rec: float = Field(0, ge=0, le=200)
+    asset_group: Literal["Secondary wire", "Pole", "Fuse bank", "Transformer", "Other"] = "Pole"
     damage_location: str = Field("branch", pattern="^(branch|other)$")
     cr: int = Field(3, ge=1, le=8)
-    mu: float | None = None
+    mu: float | None = Field(None, ge=1, le=10)
     access_blocked: bool = False
 
 
@@ -38,7 +39,7 @@ class StatusRequest(BaseModel):
     premise_id: str | None = None
     latitude: float | None = Field(None, ge=-90, le=90)
     longitude: float | None = Field(None, ge=-180, le=180)
-    address: str | None = Field(None, min_length=3, description="US street address; geocoded then matched to nearest demo premise")
+    address: str | None = Field(None, min_length=3, max_length=200, description="US street address; geocoded, checked against the served area, then matched to a nearby demo premise")
     use_nws: bool = Field(
         False,
         description="Fill storm sliders from NWS at your location (and feeder sample points when scan_feeder_weather is true)",
@@ -71,6 +72,9 @@ async def _resolve_and_compute(body: StatusRequest) -> dict[str, Any]:
             longitude=body.longitude,
             address=body.address,
         )
+    except Abstain as e:
+        # Outside the served area / no representative premise / geocoder down: decline rather than answer from a bad match.
+        raise HTTPException(status_code=503 if e.reason == "geocoder_unavailable" else 422, detail=e.message) from e
     except ValueError as e:
         if body.address:
             raise HTTPException(status_code=404, detail=str(e)) from e
